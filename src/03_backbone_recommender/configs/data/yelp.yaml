@@ -1,0 +1,7 @@
+train: yelp
+valid: yelp
+test: test.txt
+tokenizer_name_or_path: MDLMTokenizer
+cache_dir: /home/sjj/wenhao/DISCO/datasets/Yelp
+wrap: True
+streaming: False

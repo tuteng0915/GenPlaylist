@@ -1,0 +1,144 @@
+defaults:
+  - _self_
+  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /data: spotify
+  - /model: small
+  - /strategy: ddp
+  - /noise: loglinear
+  - /lr_scheduler: constant_warmup
+
+mode: train  # train / ppl_eval / sample_eval / rec_eval
+diffusion: absorbing_state
+backbone: dit  # dit / dimamba / ar
+parameterization: subs  # subs / d3pm / sedd
+time_conditioning: False
+T: 0  # 0 (continuous time) / 1000 
+subs_masking: False
+
+seed: 1
+
+loader:
+  global_batch_size: 512
+  eval_global_batch_size: ${.global_batch_size}
+  # Note: batch_size and eval_batch_size are **per machine**
+  batch_size: ${div_up:${.global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
+  eval_batch_size: ${div_up:${.eval_global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
+  num_workers: ${eval:"len(__import__('os').sched_getaffinity(0))"}
+  pin_memory: True
+
+sampling:
+  predictor: ddpm_cache  # analytic, ddpm, ddpm_cache
+  steps: 256
+  noise_removal: True
+  # TODO(yair): @subham, why aren't these params under `eval`?
+  num_sample_batches: 2  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
+  num_sample_log: 2
+  semi_ar: False
+  stride_length: 1
+  num_strides: 1
+  cfg_enabled: false  # true = CFG prefix token conditioning（需重新训练）
+  cfg_encoder: false  # true = 用 Transformer encoder 编码 context（false = mean-pool）
+  cfg_p_drop: 0.1     # 训练时 context dropout 概率
+  cfg_w: 2.0          # 推理 guidance scale（1.0=仅 conditioned，>1=放大）
+
+training:
+  ema: 0.9999
+  antithetic_sampling: True
+  importance_sampling: False
+  sampling_eps: 1e-3
+  change_of_variables: False
+  # RVQ 层级 loss 权重配置
+  # Token 结构：[BOS, BOI, d0, d1, ..., d(n-1), conflict, BOI, ...]
+  # Layer 0 (d0) 决定粗粒度类别，最重要；conflict digit 很少被真正使用，权重最低
+  # rvq_weights: 各 RVQ 层的权重列表 [d0, d1, d2, ...]，若长度不足则用最后一个值补充
+  # conflict_weight: conflict digit 的权重
+  # 权重不做归一化，总 loss 量级会随权重均值变化，建议保持权重均值在 1.0 附近
+  layer_loss_weights:
+    enabled: false
+    rvq_weights: [2.0, 1.5, 1.0]
+    conflict_weight: 0.5
+
+eval:
+  checkpoint_path: ''  # Used to evaluate a checkpoint after training.
+  disable_ema: False
+  compute_generative_perplexity: False
+  perplexity_batch_size: 8
+  compute_perplexity_on_sanity: False
+  gen_ppl_eval_model_name_or_path: gpt2-large  # gpt2-large, meta-llama/Llama-2-7b-hf
+  generate_samples: True
+  # ======= Prediction Control for rec_eval Mode =======
+  # Priority: predict_num_items > predict_ratio > default (0.5)
+  # Examples for a bundle with 10 items:
+  #   - predict_num_items: 2  → input: 8 items, predict: 2 items (fixed count)
+  #   - predict_ratio: 0.3    → input: 7 items, predict: 3 items (30% of total)
+  #   - both null             → input: 5 items, predict: 5 items (default 50%)
+  predict_num_items: null  # If set, predict exactly this many items (e.g., 2, 3). Takes highest priority.
+  predict_ratio: null      # If set, predict this ratio of items (e.g., 0.3, 0.8). Takes second priority.
+
+optim:
+  weight_decay: 0
+  lr: 3e-4
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-8
+
+trainer:
+  _target_: lightning.Trainer
+  accelerator: cuda
+  num_nodes: 1
+  devices: ${device_count:}
+  accumulate_grad_batches: ${div_up:${loader.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size} * ${trainer.num_nodes}}}
+  gradient_clip_val: 1.0
+  precision: 'bf16'
+  num_sanity_val_steps: 2
+  max_steps: 20000
+  log_every_n_steps: 10
+  limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
+  limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
+  val_check_interval: 32
+
+wandb: null  # 已禁用，使用 TensorBoard 替代（bash scripts/start_tensorboard.sh）
+
+# TensorBoard 配置 - 本地实时可视化
+use_tensorboard: true
+
+hydra:
+  run:
+    dir: ./outputs/${data.train}/${now:%Y.%m.%d}/${now:%H%M%S}
+  job:
+    chdir: true
+
+checkpointing:
+  # Use custom `save_dir` if, e.g., saving to S3 bucket, otherwise leave this parameter as is
+  save_dir: ${cwd:}
+  # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
+  resume_from_ckpt: true
+  resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt
+
+evaluator:
+  dataset: spotify
+  feature_type: clhe
+  sent_emb_pca: -1
+  cir: 1
+  topk: [1] #3,5,10,20
+  metrics: [recall,precision,hit,hitf,sm]
+  sm_topk: 1  # K for SM@K per-position retrieval check
+  # 候选集配置（用于rec_eval模式的item检索）
+  candidate_multiplier: 99  # 候选集大小 = label_items数量 × multiplier（默认99，总共100倍）
+  allow_duplicate_items: false  # 是否允许预测重复item（false=bundle模式，true=sequence模式） 
+
+dataset: spotify
+feature_type: clhe
+sent_emb_pca: -1
+seq_len: 30
+cir: 1
+swap_ratio: 0.4
+
+num_proc: 1
+eval_batch_size: 32
+train_batch_size: 64
+
+rq_faiss: True
+faiss_omp_num_threads: 32
+rq_n_codebooks: 3
+rq_codebook_size: 256

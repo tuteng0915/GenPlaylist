@@ -1,0 +1,10 @@
+checkpoint_every_n_steps:
+  _target_: lightning.pytorch.callbacks.ModelCheckpoint
+  monitor: 'val/nll'  # 监控验证集负对数似然
+  mode: 'min'  # 保留val/nll最小的checkpoint
+  save_top_k: 3  # 只保留最好的3个checkpoint
+  save_last: True # save model as ${save_dir}/checkpoints/last.ckpt
+  dirpath: ${checkpointing.save_dir}/checkpoints
+  verbose: True
+  auto_insert_metric_name: False
+  every_n_train_steps: 500  # 每500步保存一次（而不是10步）

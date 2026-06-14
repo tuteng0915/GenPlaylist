@@ -1,0 +1,7 @@
+train: spotify
+valid: spotify
+test: test.txt
+tokenizer_name_or_path: MDLMTokenizer
+cache_dir: /home/sjj/wenhao/DISCO/datasets/spotify
+wrap: True
+streaming: False

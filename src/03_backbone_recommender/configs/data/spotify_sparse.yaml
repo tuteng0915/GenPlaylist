@@ -1,0 +1,7 @@
+train: spotify_sparse
+valid: spotify_sparse
+test: test.txt
+tokenizer_name_or_path: MDLMTokenizer
+cache_dir: /model/tteng/GPC/Generative_PC/datasets/datasets--xhLiu--BundleConstruction/snapshots/cd4ca80e829c1a520f5ccdb228177b99f6caef1f/spotify_sparse
+wrap: True
+streaming: False

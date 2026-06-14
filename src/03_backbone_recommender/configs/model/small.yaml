@@ -1,0 +1,11 @@
+name: small
+type: ddit
+hidden_size: 64 #768
+cond_dim: 128
+# cond_dim_cent: 128
+length: 32 #1024
+n_blocks: 6 #12
+n_heads: 8 #12
+scale_by_sigma: True
+dropout: 0.1
+tie_word_embeddings: False

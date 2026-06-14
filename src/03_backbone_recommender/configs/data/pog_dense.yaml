@@ -1,0 +1,7 @@
+train: pog_dense
+valid: pog_dense
+test: pog_dense
+tokenizer_name_or_path: MDLMTokenizer
+cache_dir: /model/tteng/GPC/datasets_v1/BundleConstruction/snapshots/cd4ca80e829c1a520f5ccdb228177b99f6caef1f/pog_dense
+wrap: True
+streaming: False
