@@ -7,35 +7,33 @@
 
 ## 1. Overview
 
-GenPlaylist extends DDBC's discrete diffusion framework from bundle retrieval to **playlist latent expansion**: given a seed set of songs, generate *new* songs (not from a fixed catalog) that continue the playlist while respecting its semantic structure.
+GenPlaylist extends DDBC's discrete diffusion framework toward **reference-based personalized music generation**: given a set of reference songs expressing a user's musical preference, generate a new personalized song (not from a fixed catalog) whose semantic position and textual generation intent align with that preference, via a frozen pretrained music generator.
 
 The full pipeline:
 
 ```
-Seed set C = {m_1, ..., m_k}
+Reference set C = {m_1, ..., m_k}
   │
   ├─ CLHE encode ──────────────────────────────────────────────────────┐
-  │   audio_feat + CF_feat → E_clhe(m) ∈ R^d_c                        │
-  │   text (lyrics/tags) via T5-small → E_t5(m) ∈ R^d_t               │
-  │   concat → E(m) = [E_clhe(m) | E_t5(m)] ∈ R^(d_c + d_t)          │
+  │   E(m) ∈ R^64  (CLHE backbone, frozen)                             │
   │                                                                     │
-  ├─ Compute playlist structure ────────────────────────────────────────┤
+  ├─ Preference structure ──────────────────────────────────────────────┤
   │   μ_C  = mean{ E(m) }                                              │
   │   σ²_C = mean{ ||E(m) - μ_C||² }                                  │
   │                                                                     │
   ├─ RVQ discretize ────────────────────────────────────────────────────┤
-  │   E(m) → z(m) = (d0, d1, d2, d3, conflict)   [4-level, 128 codes] │
-  │   + assign 6 creative cue tokens per item                          │
+  │   E(m) → z(m) = (z1, z2, z3, z_conf)  [L=3, K=256, 1-indexed]     │
+  │   + assign 6 creative cue tokens per item  (WP-B)                  │
   │                                                                     │
   ├─ Dispersion-conditioned masked diffusion ───────────────────────────┤
   │   conditioning: seed tokens (fixed) + μ_C, σ²_C (injected)        │
-  │   output: n new item token sequences                               │
+  │   output: next-item token sequence [z1, z2, z3, z_conf, c1..c6]   │
   │                                                                     │
-  └─ Verbalization ─────────────────────────────────────────────────────┘
-      generated tokens → decode RVQ → Ê(m)
-      Ê_t5 component → nearest neighbor in T5 space
-        → full T5 hidden states → T5 decoder → lyric imagery draft
-      → LLM refine → ACE-Step synthesis
+  └─ Prompt construction + synthesis ───────────────────────────────────┘
+      decode RVQ → Ê(m); kNN lookup in catalog CLHE space
+      creative cues + neighbor metadata → LLM prompt assembly
+      LLM (Qwen3) → music attributes + lyric draft
+      ACE-Step (frozen) → personalized audio
 ```
 
 ---
@@ -44,35 +42,33 @@ Seed set C = {m_1, ..., m_k}
 
 ### 2.1 Embedding
 
-Each item `m` is represented by a **concatenated embedding**:
+Each item `m` is represented by the **CLHE embedding**:
 
 ```
-E(m) = [ E_clhe(m) | E_t5(m) ]
+E(m) ∈ R^64   (CLHE backbone, frozen weights in clhe_weight.npy)
 ```
 
-- `E_clhe(m)`: CLHE encoder output — fuses audio features + CF features
-- `E_t5(m)`: T5-small encoder mean-pool over lyrics/tags tokens
-
-The split is preserved at all times so the T5 component can be used independently for verbalization. The two components are **never mixed** (no linear projection across the boundary).
+CLHE fuses audio features and collaborative-filtering signals, providing a shared music embedding space sensitive to both acoustic and semantic properties.
+Verbalization does not use a separate text encoder — instead, the generated latent `Ê(m)` is grounded via kNN retrieval in catalog CLHE space, using the retrieved neighbors' metadata (title, artist, genre, mood, lyric_excerpt) as the textual proxy.
 
 ### 2.2 Token Sequence per Item
 
-After RVQ quantization + creative cue assignment, each item occupies **12 token slots** in the sequence:
+After RVQ quantization + creative cue assignment, each item occupies **11 token slots** in the sequence:
 
 ```
-[BOI, d0, d1, d2, d3, conflict, c1, c2, c3, c4, c5, c6]
-  ↑                                ↑
-BOI token                    6 creative cue tokens
+[BOI, z1, z2, z3, z_conf, c1, c2, c3, c4, c5, c6]
+  ↑                  ↑         ↑
+BOI token     conflict digit   6 creative cue tokens
 ```
 
-Stride `k = 12` (was 6 in DDBC-Seq with 4 codebooks).
+Stride `k = 11`. RVQ codes are **1-indexed** (z1 ∈ [1,256], z2 ∈ [257,512], z3 ∈ [513,768]); `z_conf` is a separate conflict-avoidance digit (74 observed values, range 769–842).
 
 Full sequence structure:
 
 ```
-[BOS,  BOI, d0..d3, conflict, c1..c6,  BOI, d0..d3, conflict, c1..c6, ..., EOS]
-  ↑    ←──── item 1 (k=12) ────────→   ←──── item 2 ────────────────→      ↑
-pos 0                                                                    pos L-1
+[BOS,  BOI, z1..z3, z_conf, c1..c6,  BOI, z1..z3, z_conf, c1..c6, ..., EOS]
+  ↑    ←──── item 1 (k=11) ─────────→  ←──── item 2 ──────────────→      ↑
+pos 0                                                                   pos L-1
 ```
 
 ### 2.3 Vocabulary Layout
@@ -80,20 +76,15 @@ pos 0                                                                    pos L-1
 | Range | Token type | Count |
 |---|---|---|
 | 0 | BOS | 1 |
-| 1 – 128 | d0 (RVQ level 0) | 128 |
-| 129 – 256 | d1 (RVQ level 1) | 128 |
-| 257 – 384 | d2 (RVQ level 2) | 128 |
-| 385 – 512 | d3 (RVQ level 3) | 128 |
-| 513 – 640 | conflict digit | 128 |
-| 641 | BOI | 1 |
-| 642 | EOS | 1 |
-| 643 – 2690 | Creative cues | 2048 |
-| **Total** | | **2691** |
+| 1 – 768 | RVQ codes (L=3 × K=256, 1-indexed) | 768 |
+| 769 – 842 | conflict digit z_conf | 74 |
+| 843 | BOI | 1 |
+| 844 | EOS | 1 |
+| 845 – 2892 | Creative cues | 2048 |
+| 2893 | MASK (diffusion) | 1 |
+| **Total** | | **2894** |
 
-Formula cross-check (n_digit=4, codebook_size=128):
-- BOI = (n_digit + 1) × codebook_size + 1 = 5 × 128 + 1 = **641** ✓
-- EOS = BOI + 1 = **642** ✓
-- Creative cues start = EOS + 1 = **643** ✓
+Note: CLHE codes are 1-indexed; embedding reconstruction uses `weight[code - 1]` for each of the three levels.
 
 ---
 
@@ -222,22 +213,22 @@ Output: `item_cues.json` — `{item_id: [cue_id_1, ..., cue_id_6]}`
 After the diffusion generates new token sequences:
 
 ```
-generated tokens
+generated tokens [z1, z2, z3, z_conf, c1..c6]
     ↓
-decode RVQ → Ê(m) = [Ê_clhe | Ê_t5]
+decode RVQ → Ê(m) = weight[z1-1] + weight[z2-1] + weight[z3-1]  ∈ R^64
     │
-    ├─ Ê_t5 → nearest neighbor in T5 embedding space
-    │          → retrieve full T5 hidden state sequence
-    │          → T5 decoder → lyric imagery draft
+    ├─ kNN in catalog CLHE space (faiss IndexFlatIP)
+    │   → top-k neighbors → metadata (title, artist, genre, mood, tempo, key, lyric_excerpt)
     │
-    ├─ creative cue tokens → cue vocabulary lookup → imagery words (direct)
+    ├─ creative cue tokens c1..c6 → cue vocabulary lookup → imagery words
     │
-    └─ LLM (Qwen3) refine: imagery draft + cue words → lyrics + music attributes
+    └─ LLM (Qwen3) prompt assembly:
+         neighbor metadata + cue words + playlist style summary (from μ_C kNN)
+         → music attributes (genre, mood, tempo, key, instrumentation, language)
+         → lyric draft with [verse]/[chorus]/[bridge] section markers
                     ↓
-              ACE-Step synthesis → audio
+              ACE-Step (frozen) → personalized audio waveform
 ```
-
-The T5 component is used for **retrieval**, not direct decoding from a compressed vector — the decoder receives the full token-level hidden states of the nearest neighbor, preserving decodability.
 
 ---
 
@@ -260,28 +251,29 @@ Retrieval metrics (Recall, Precision, Hit) are **dropped**. Generated music cann
 | File | Change |
 |---|---|
 | `models/dit.py` | Add `disp_map`, `cent_map`; inject σ²_C, μ_C into conditioning |
-| `diffusion.py` | Pass μ_C, σ²_C through full call chain; update generation to not restrict to catalog items |
-| `tokenizer.py` | Extend vocab to 2691; stride k=12; load `item_cues.json`; update token assembly |
-| `dataset.py` | Compute μ_C, σ²_C per batch; add to batch dict; new playlist data loader |
-| `evaluator.py` | Replace retrieval metrics with FAD, CLAP Score, Δσ², CD |
-| `configs/config.yaml` | Add dispersion conditioning params, creative cues params |
-| `models/t5_encoder.py` | **New**: T5-small encoder wrapper (mean-pool output + stored hidden states) |
-| `models/clhe.py` | **New**: CLHE fusion module wrapper |
-| `scripts/scrape_lyrics.py` | **New**: Genius + NetEase scraper |
-| `scripts/build_creative_cues.py` | **New**: Full NLP pipeline (extract → filter → vocab → assign) |
+| `diffusion.py` | Pass μ_C, σ²_C through full call chain; generation not restricted to catalog items |
+| `tokenizer.py` | Vocab = 2894; stride k=11; L=3/K=256 RVQ (1-indexed); load `item2cues.json`; update illegal-mask table |
+| `dataset.py` | Compute μ_C, σ²_C per batch; filter: original length 30–90, freq≥10, post-filter 10–60 |
+| `evaluator.py` | Replace retrieval metrics with FAD, CLAP-Sim, Δσ², CD, MERT/CLAP/ImageBind semantic sim |
+| `configs/config.yaml` | vocab_size=2894, rq_n_codebooks=3, rq_codebook_size=256, stride=11, dispersion_cond=true |
+| `verbalization.py` | kNN via faiss; LLM prompt assembly from cues + neighbor metadata; Qwen3 API call |
+| `synthesis.py` | ACE-Step frozen pipeline wrapper; style_ref_audio_path support |
 
 ---
 
-## 8. Open Questions / Deferred Decisions
+## 8. Resolved Decisions
 
-| Question | Status |
+| Decision | Status |
 |---|---|
-| Actual playlist dataset (not Spotify MPD) | User will provide |
-| Audio feature extraction method (MFCC / CLAP / other) | TBD |
-| CF features availability | TBD |
-| RVQ training: from scratch vs. Faiss (current approach) | Keep Faiss for now |
-| T5 model variant: `t5-small` vs `t5-base` | TBD |
-| n_codebooks=4, codebook_size=128 confirmed | ✓ |
-| Creative cues vocab size = 2048 confirmed | ✓ |
-| K=6 cues per item confirmed | ✓ |
-| Dispersion conditioning via additive projection confirmed | ✓ |
+| Dataset: Spotify MPD v2 subset (6,585 playlists / 5,119 songs) | ✓ |
+| Embedding: CLHE backbone, frozen (clhe_weight.npy, 768×64) | ✓ |
+| RVQ: L=3 codebooks, K=256 entries, 1-indexed codes | ✓ |
+| Conflict digit z_conf: 74 observed values (range 769–842) | ✓ |
+| Token stride: k=11 per item | ✓ |
+| Vocab size: 2894 (incl. MASK token) | ✓ |
+| Creative cues vocab size: 2048 | ✓ |
+| K=6 cues per item | ✓ |
+| Dispersion conditioning via additive SiLU projection | ✓ |
+| Verbalization: kNN in CLHE space + Qwen3 LLM (no T5) | ✓ |
+| Synthesis: ACE-Step (frozen) | ✓ |
+| Avg σ²_C (v2 training set): 0.282 (Q33=0.255, Q66=0.310) | ✓ |

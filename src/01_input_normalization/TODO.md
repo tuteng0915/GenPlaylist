@@ -1,7 +1,7 @@
-# WP-A — Input Normalization
+# WP-A — Reference Input Construction
 
 **Owner:** Student 1
-**Goal:** Convert raw user input into `ContextPrefix(item_ids=[m1,...,mK])`.
+**Goal:** Convert raw user input into a clean reference context `ContextPrefix(item_ids=[m1,...,mK])` that expresses the user's musical preference for personalized generation.
 
 **Read first:** `00_data_schema/schema.py` → `ContextPrefix`, `CatalogItem`
 **Interface stub:** `normalizer.py` (unimplemented paths raise `NotImplementedError`)

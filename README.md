@@ -1,4 +1,4 @@
-# GenPlaylist: Structure-Aware Playlist Generation via Latent Expansion
+# GenPlaylist: Reference-Based Personalized Music Generation via Preference-to-Prompt Learning
 
 ## Repository Structure
 
@@ -11,23 +11,23 @@ GenPlaylist_Code/
     ├── shared/                        # Data schemas and cross-WP interface contracts
     │   └── schema.py                  # ContextPrefix · CueMappingEntry · GeneratedItem · SynthesisResult
     │
-    ├── 01_input_normalization/        # WP-A: Context Retrieval and Prefix Construction
+    ├── 01_input_normalization/        # WP-A: Reference Input Construction
     │   └── normalizer.py              # raw user input → ContextPrefix(item_ids=[m1,...,mK])
     │
     ├── 02_creative_cues/              # WP-B: Creative Cue Mining and Vocabulary Construction
     │   └── cue_mining.py              # lyrics/metadata → cue_vocab.json + item2cues.json
     │
-    ├── 03_backbone_recommender/       # WP-D: Core Diffusion Model (mentor)
+    ├── 03_backbone_recommender/       # WP-D: Core Preference Modeling (mentor)
     │   ├── diffusion.py               # Dispersion-conditioned masked discrete diffusion
-    │   ├── tokenizer.py               # Joint RVQ + Creative Cue tokenization (12-token stride)
-    │   ├── playlist_structure.py      # μ_C and σ²_C computation
+    │   ├── tokenizer.py               # Joint RVQ + Creative Cue tokenization (11-token stride)
+    │   ├── playlist_structure.py      # μ_C and σ²_C preference structure computation
     │   ├── dataset.py / dataloader.py
     │   ├── evaluator.py
     │   ├── models/                    # DIT backbone (AdaLN dispersion conditioning)
     │   ├── configs/
     │   └── main.py                    # train / rec_eval / ppl_eval / generate modes
     │
-    ├── 04_synthesis/                  # WP-C: Verbalization, Synthesis, and Demo
+    ├── 04_synthesis/                  # WP-C: Prompt Construction, Verbalization, and Interactive Evaluation
     │   ├── verbalization.py           # z_hat_emb → music_attributes + lyric_draft  (from VibeMus)
     │   ├── synthesis.py               # attributes + lyrics → audio via ACE-Step     (from VibeMus)
     │   └── app.py                     # Gradio demo + user study UI

@@ -8,8 +8,9 @@ Each section corresponds to one source file or folder; items link directly to wh
 
 Data loading layer. Currently only handles the Spotify MPD format.
 
-- [ ] Unify filtering: sequence length ≥ 5; split each playlist into first ⌊|p|/2⌋ context + first held-out next item
-- [ ] Populate Table 1 dataset statistics (`#Playlists`, `#Songs`, `Avg. len`, `Avg. σ²_C`)
+- [ ] Dataset already filtered (v2 subset in `data/playlists/mpd_subset/`): original length 30–90, freq≥10, post-filter 10–60, 8-round convergence → 6,585 playlists / 5,119 songs
+- [ ] Split each playlist into first ⌊|p|/2⌋ songs as reference context + first held-out next item as proxy target
+- [x] Table 1 dataset statistics: 6,585 playlists / 5,119 songs / avg len 28.7 / avg σ²_C 0.282
 
 **External dependency**: normalized context prefix format (item_id list) from WP-A
 
@@ -20,23 +21,23 @@ Data loading layer. Currently only handles the Spotify MPD format.
 Joint RVQ + Creative Cue tokenization. Currently pure RVQ (3–4 levels, K=256).
 
 ### 2a. RVQ parameters
-- [ ] Switch to L=4, K=128; update vocabulary structure → **vocab_size = 2691**
+- [ ] Use L=3, K=256 (1-indexed codes from CLHE backbone); vocab structure → **vocab_size = 2894**
   - BOS: 1
-  - RVQ L0–L3: 4×128 = 512
-  - Conflict digit: 128
+  - RVQ codes (1-indexed, global): 768  (z1 ∈ [1,256], z2 ∈ [257,512], z3 ∈ [513,768])
+  - Conflict digit z_conf: 74  (observed range 769–842)
   - BOI: 1 / EOS: 1
   - Creative Cues: 2048
-- [ ] Update `boi_token = (4+1)*128+1 = 641`, `eos_token = 642`
-- [ ] Update `vocab_size` property
+  - MASK token: 1
+- [ ] Update `boi_token`, `eos_token`, `vocab_size` accordingly
+- [ ] Embedding reconstruction: `E(m) = weight[z1-1] + weight[z2-1] + weight[z3-1]`
 
-### 2b. Joint RVQ + Creative Cue stride (12 tokens per item)
-- [ ] Modify `_tokenize_once`: expand item stride from `[BOI, z1-z4, z_conf]` (6 tokens) to
-  `[BOI, z1, z2, z3, z4, z_conf, c1, c2, c3, c4, c5, c6]` (12 tokens)
-- [ ] Load `item2cues.json` from WP-B; map cue IDs to vocabulary offset (+643)
+### 2b. Joint RVQ + Creative Cue stride (11 tokens per item)
+- [ ] Modify `_tokenize_once`: item stride = `[BOI, z1, z2, z3, z_conf, c1, c2, c3, c4, c5, c6]` (11 tokens)
+- [ ] Load `item2cues.json` from WP-B; map cue IDs to vocabulary offset
 - [ ] Fallback: when WP-B output is not ready, fill cue positions with 0 (also the `w/o cues` ablation path)
 
 ### 2c. Position-type illegal masking
-- [ ] Implement `make_type_mask(seq_len, stride=12)` → valid token range per position
+- [ ] Implement `make_type_mask(seq_len, stride=11)` → valid token range per position
 - [ ] Apply in `diffusion.py` inference loop to filter illegal tokens from logits
 
 **External dependency**: WP-B outputs `item2cues.json` and `cue_vocab.json` (2048 entries)

@@ -1,7 +1,7 @@
-# WP-C — Synthesis & Demo
+# WP-C — Prompt Construction, Verbalization, and Interactive Evaluation
 
 **Owner:** Student 3
-**Goal:** Verbalize generated embeddings → music attributes + lyrics → audio; build demo + user study.
+**Goal:** Convert creative cues and reference metadata into explicit generation prompts for the frozen ACE-Step generator; build demo and user study to evaluate the full system.
 
 **Read first:** `00_data_schema/schema.py` → `GeneratedItem`, `SynthesisResult`, `CatalogItem`
 **Interface stubs:** `verbalization.py`, `synthesis.py`, `app.py`
@@ -11,10 +11,11 @@
 
 ## Tasks
 
-### verbalization.py
-- [ ] **LLM** — replace `_call_qwen3()` stub with a real DashScope API call (set `DASHSCOPE_API_KEY` in `.env`); add retry + 30 s timeout
-- [ ] **kNN index** — build a `faiss.IndexFlatIP` over all catalog CLHE embeddings at module load; use it in `knn_verbalize()` instead of the numpy loop
-- [ ] **Diversity threshold** — compute Q33/Q66 of `σ²_C` on training playlists; save to `outputs/dispersion_tiers.json`; replace the hardcoded threshold
+### Prompt Construction (verbalization.py)
+- [ ] **kNN retrieval** — build a `faiss.IndexFlatIP` over all catalog CLHE embeddings; retrieve k=5 nearest neighbors for `ẑ_{t+1}` (next-item slot) and for `μ_C` (playlist centroid)
+- [ ] **Prompt assembly** — combine creative cues (from WP-B `item2cues.json`), neighbor metadata (title/artist/genre/mood/tempo/key/lyric_excerpt from `catalog_metadata.json`), and playlist style summary into LLM input
+- [ ] **LLM call** — replace `_call_qwen3()` stub with a real DashScope API call (set `DASHSCOPE_API_KEY` in `.env`); add retry + 30 s timeout; generate music attributes + lyric draft with `[verse]`/`[chorus]`/`[bridge]` markers
+- [ ] **Diversity threshold** — load Q33/Q66 of `σ²_C` from `outputs/dispersion_tiers.json` (produced by WP-D); use to give wider thematic latitude for diverse reference sets
 
 ### synthesis.py
 - [ ] **ACE-Step** — install and wire `ACEStepPipeline`; test a 30 s generation; record peak VRAM and generation time

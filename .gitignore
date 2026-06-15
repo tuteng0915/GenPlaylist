@@ -33,9 +33,6 @@ lightning_logs/
 wandb/
 
 # ── Datasets and large data files ─────────────────────────────────────────────
-datasets/
-datasets.zip
-# data/ — audio, lyrics, tags acquired locally; not versioned
 data/
 *.wav
 *.mp3
@@ -81,3 +78,4 @@ geoip.db
 analysis_results.png
 ANALYSIS_SUMMARY.md
 test_wandb.py
+
