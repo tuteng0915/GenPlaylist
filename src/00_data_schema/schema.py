@@ -72,7 +72,7 @@ TOKEN_OFFSET = [RQ_CODEBOOK_SIZE * level + 1 for level in range(RQ_N_CODEBOOKS)]
 CONFLICT_OFFSET = RQ_N_CODEBOOKS * RQ_CODEBOOK_SIZE   # = 768
 
 # GenPlaylist extension (TODO)
-CUE_TOKENS   = 0     # TODO: 6 after WP-B delivers item2cues.json
+CUE_TOKENS   = 6     # WP-B deliverable: c0..c5 per item
 CUE_VOCAB_SIZE = 2048
 
 

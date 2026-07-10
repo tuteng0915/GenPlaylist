@@ -47,6 +47,15 @@ src/*/outputs/audio/
 src/*/outputs/evaluation_logs/
 evaluation_logs/
 
+# Cue-mining caches, per-method scratch outputs, and generated report snapshots
+src/*/outputs/_cache/
+src/*/outputs/keybert/
+src/*/outputs/llm/
+src/*/outputs/tfidf/
+src/*/outputs/yake/
+src/*/outputs/comparison_report*.md
+src/*/outputs/reconstruction_report*.md
+
 # ── Upload artifacts ───────────────────────────────────────────────────────────
 upload/
 
@@ -72,6 +81,7 @@ secrets.json
 .idea/
 *.swp
 *.swo
+.claude/
 
 # ── Misc project-specific ─────────────────────────────────────────────────────
 geoip.db
