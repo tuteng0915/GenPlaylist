@@ -13,26 +13,25 @@ Level 3 reconstruction is intentionally NOT run for every arm (expensive); use
 run_compare.py --rank-by <winner> --level3 for the leading arms.
 
 Usage:
-  .venv/Scripts/python.exe sweep_ranking.py --method tfidf \
+  .venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_ranking.py --method tfidf \
       --limits 500,1000,2000,3000,5000 --retrieval-limit 1000 \
       --vocab-size 2048 --min-df 2 --dedup-threshold 0.92 --num-cues 18 \
       --lyrics-mode dedup --lyrics-cap 2000 --top-n 60 --eval-sample 100
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
-sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "00_data_schema"))
 
 import numpy as np       # noqa: E402
 import cue_extractors    # noqa: E402
@@ -41,29 +40,9 @@ import cue_lyrics        # noqa: E402
 import cue_eval          # noqa: E402
 import cue_clients       # noqa: E402
 import cue_io            # noqa: E402
-from schema import CatalogItem  # noqa: E402
+import data_loading      # noqa: E402
 
-OUT_DIR = os.path.join(BASE, "src", "02_creative_cues", "outputs", "experiments")
-_CATALOG = None
-
-
-def _catalog():
-    global _CATALOG
-    if _CATALOG is None:
-        with open(os.path.join(BASE, "data", "dataset", "catalog_metadata.json"), encoding="utf-8") as f:
-            _CATALOG = list(json.load(f).items())
-    return _CATALOG
-
-
-def load_data(limit):
-    items = [CatalogItem(**{k: v for k, v in e.items() if k in CatalogItem.__dataclass_fields__})
-             for _iid, e in _catalog()[:limit]]
-    lyrics = {}
-    for it in items:
-        p = os.path.join(BASE, "data", "lyrics", "spotify", f"{it.item_id}.txt")
-        if os.path.isfile(p):
-            lyrics[it.item_id] = open(p, encoding="utf-8", errors="ignore").read()
-    return items, lyrics
+OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "experiments")
 
 
 def _song_text(item, lyrics, cap=600):
@@ -73,9 +52,8 @@ def _song_text(item, lyrics, cap=600):
 
 def build_pool(limit, args, tag):
     """Stages 0-4 once for a corpus size -> shared candidate pool."""
-    items, lyrics = load_data(limit)
-    lyrics_proc = {iid: cue_lyrics.preprocess_lyrics(t, args.lyrics_mode, args.lyrics_cap)
-                   for iid, t in lyrics.items()}
+    items, lyrics = data_loading.load_catalog_and_lyrics(limit)
+    lyrics_proc = data_loading.build_lyrics_proc(lyrics, args.lyrics_mode, args.lyrics_cap)
     block = cue_normalize.build_block_tokens(items)
     raw = cue_extractors.extract_raw_cues(items, lyrics_proc, method=args.method,
                                           force=args.force, top_n=args.top_n, cache_tag=tag)
@@ -300,7 +278,11 @@ def _write_report(args, arms, limits, vocab_sets, health, retrieval, rl):
         "\n**`df_idf`** multiplies frequency by distinctiveness, so the score peaks at "
         "*mid-frequency* cues: recurrent enough to generalise, rare enough to discriminate. "
         "Mid-frequency cues scale proportionally with the corpus, so this should be markedly "
-        "more stable than IDF.\n",
+        "more stable than IDF. **Caveat (found during analysis):** with the default "
+        "`max_df_frac=0.3`, this score is monotonic in df across the ENTIRE df-band-filtered "
+        "range (its peak sits at df/N ≈ 1/e ≈ 0.368, above the 0.3 cutoff) — so at that default,\n"
+        "`df_idf` selects the identical set as `df`. Raise `max_df_frac` past ~0.37 for this arm "
+        "to actually diverge from `df`.\n",
         "\n**`band`** scores by distance to a target prevalence, `−|log(df/N) − log(target)|`. "
         "Because it uses the *relative* rate `df/N` rather than absolute counts, the criterion is "
         "invariant to corpus size, directly attacking the churn mechanism.\n",

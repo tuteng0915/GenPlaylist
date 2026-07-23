@@ -5,20 +5,24 @@ For each extraction method:
     (N = --num-cues, default CUE_TOKENS=6, the WP-D schema contract)
 
 Then writes one comparison report:
-    src/02_creative_cues/outputs/comparison_report.md
+    src/02_creative_cues/outputs/runs/<run_id>/comparison_report.md
+
+This script does the FULL evaluation (grounding, retrieval, optionally
+reconstruction) across multiple methods — for a single-method production
+vocab build with no evaluation, use run_production.py instead. The two share
+their extract/clean/assign/export logic via pipeline.py.
 
 Usage (from project root, with venv):
-    .venv/Scripts/python.exe run_compare.py --limit 1000 --methods tfidf,yake
-    .venv/Scripts/python.exe run_compare.py --methods tfidf,yake,keybert,llm \
+    .venv/Scripts/python.exe src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
+    .venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm \
         --eval-sample 200 --level3
-    .venv/Scripts/python.exe run_compare.py --methods tfidf,yake,keybert,llm \
+    .venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm \
         --llm-batch
-    .venv/Scripts/python.exe run_compare.py --methods tfidf,yake \
+    .venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf,yake \
         --held-out-eval --test-frac 0.15
 """
 
 import argparse
-import json
 import os
 import sys
 
@@ -27,23 +31,26 @@ try:
 except Exception:
     pass
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
-sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
+# This script lives alongside its sibling cue_*.py modules, so they're already
+# importable (Python puts the running script's own directory on sys.path[0]).
+# Only 00_data_schema, one level up from the repo root's src/, needs adding.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_data_schema"))
 
 import uuid                     # noqa: E402
 import cue_extractors          # noqa: E402
 import cue_normalize           # noqa: E402
-import cue_assign              # noqa: E402
-import cue_eval                # noqa: E402
-import cue_clients             # noqa: E402
-import cue_lyrics              # noqa: E402
-import cue_mining              # noqa: E402
-import cue_io                  # noqa: E402
-from schema import CatalogItem, CUE_TOKENS  # noqa: E402
+import cue_assign               # noqa: E402
+import cue_eval                 # noqa: E402
+import cue_clients              # noqa: E402
+import cue_lyrics               # noqa: E402
+import cue_export               # noqa: E402
+import cue_io                   # noqa: E402
+import data_loading             # noqa: E402
+import pipeline                 # noqa: E402
+from schema import CUE_TOKENS   # noqa: E402
 from datetime import datetime   # noqa: E402
 
-OUT_ROOT = os.path.join(BASE, "src", "02_creative_cues", "outputs")
+OUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 # Per-run output folder (set in main). Shared caches stay under OUT_ROOT; every
 # run's own artifacts (reports + per-method vocab/item2cues) go under RUN_DIR so
 # concurrent runs never collide.
@@ -51,67 +58,40 @@ RUN_DIR = OUT_ROOT
 
 
 def load_data(limit):
-    with open(os.path.join(BASE, "data", "dataset", "catalog_metadata.json"), encoding="utf-8") as f:
-        raw = json.load(f)
-    items = [
-        CatalogItem(**{k: v for k, v in e.items() if k in CatalogItem.__dataclass_fields__})
-        for e in list(raw.values())[:limit]
-    ]
-    lyrics = {}
-    for it in items:
-        p = os.path.join(BASE, "data", "lyrics", "spotify", f"{it.item_id}.txt")
-        if os.path.isfile(p):
-            lyrics[it.item_id] = open(p, encoding="utf-8", errors="ignore").read()
-    return items, lyrics
+    return data_loading.load_catalog_and_lyrics(limit)
 
 
 def finish_method_from_raw(method, raw, items, lyrics_proc, min_df, block_tokens,
                            dedup_threshold=0.92, rank_by="idf", num_cues=CUE_TOKENS):
-    """normalize -> assign -> export. Returns (vocab, item2cues, norm_stats, cue_emb).
-
-    lyrics_proc = preprocessed lyrics used for cue assignment.
-    dedup_threshold: cosine above which two cues are merged in semantic dedup
-                     (higher = fewer merges = larger vocabulary).
-    num_cues: cues assigned per song. Defaults to CUE_TOKENS=6, the schema contract
-              CueMappingEntry validates against and WP-D expects. A different value
-              still validates and exports fine (CueMappingEntry.validate/load_mapping
-              now take a matching n_cues) but the output item2cues.json only round-trips
-              through the default loader if that loader is told the same n_cues.
-    """
-    norm = cue_normalize.build_vocab_normalized(raw, vocab_size=2048, min_df=min_df,
-                                                dedup_threshold=dedup_threshold,
-                                                rank_by=rank_by,
-                                                block_tokens=block_tokens, verbose=True)
-    vocab, cue_emb = norm["vocab"], norm["embeddings"]
-    item2cues = cue_assign.assign_all(items, lyrics_proc, vocab, cue_emb,
-                                      n_cues=num_cues, verbose=True)
+    """normalize -> assign -> export, via pipeline.py. See pipeline.finish_from_raw."""
     out_dir = os.path.join(RUN_DIR, "methods", method)
-    cue_mining.export_outputs(vocab, item2cues, out_dir)
-    return vocab, item2cues, norm["stats"], cue_emb
+    return pipeline.finish_from_raw(method, raw, items, lyrics_proc, out_dir,
+                                    min_df=min_df, dedup_threshold=dedup_threshold,
+                                    rank_by=rank_by, num_cues=num_cues,
+                                    block_tokens=block_tokens)
 
 
 def run_method(method, items, lyrics_proc, min_df, force, block_tokens, top_n, cache_tag,
                dedup_threshold=0.92, rank_by="idf", vocab_items=None, num_cues=CUE_TOKENS):
-    """extract -> normalize -> assign -> export. Returns (vocab, item2cues, norm_stats, cue_emb).
+    """extract -> normalize -> assign -> export, via pipeline.py. See pipeline.build_vocab_and_assign.
 
     vocab_items: corpus used for vocabulary building (raw cue extraction + df/idf/dedup).
     Defaults to `items`. Pass a train-only split for --held-out-eval so the vocabulary
     never sees held-out test songs; cues are still assigned to every item in `items`
     (item2cues.json stays the full deliverable either way).
     """
-    print(f"\n########## METHOD: {method} ##########")
-    vocab_source = items if vocab_items is None else vocab_items
-    raw = cue_extractors.extract_raw_cues(vocab_source, lyrics_proc, method=method, force=force,
-                                          top_n=top_n, cache_tag=cache_tag)
-    return finish_method_from_raw(method, raw, items, lyrics_proc, min_df, block_tokens,
-                                  dedup_threshold=dedup_threshold, rank_by=rank_by,
-                                  num_cues=num_cues)
+    out_dir = os.path.join(RUN_DIR, "methods", method)
+    return pipeline.build_vocab_and_assign(
+        method, items, lyrics_proc, out_dir,
+        force=force, top_n=top_n, cache_tag=cache_tag, vocab_items=vocab_items,
+        min_df=min_df, dedup_threshold=dedup_threshold, rank_by=rank_by,
+        num_cues=num_cues, block_tokens=block_tokens)
 
 
 def evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id, lyrics_ref,
                     lyrics_proc, sample_ids):
     """Coverage + within-item diversity + Level 1 grounding + Level 2 retrieval."""
-    cov = cue_mining.compute_coverage_stats(item2cues, vocab)
+    cov = cue_export.compute_coverage_stats(item2cues, vocab)
     # Within-item cue diversity (paper target < 0.7), using the assignment embeddings.
     div = cue_eval.within_item_diversity(item2cues, cue_emb)
     # Level 1 grounding: cues vs the REAL (unprocessed) lyrics.
@@ -252,8 +232,7 @@ def main():
     # preprocessed lyrics fed into extraction / assignment / retrieval
     cache_tag = cue_lyrics.cache_tag(args.lyrics_mode, args.lyrics_cap)
     print(f"[compare] lyrics-mode={args.lyrics_mode} (cap={args.lyrics_cap}) tag={cache_tag}")
-    lyrics_proc = {iid: cue_lyrics.preprocess_lyrics(t, args.lyrics_mode, args.lyrics_cap)
-                   for iid, t in lyrics_raw.items()}
+    lyrics_proc = data_loading.build_lyrics_proc(lyrics_raw, args.lyrics_mode, args.lyrics_cap)
     print(f"[compare] {len(items)} songs, {len(lyrics_raw)} with lyrics, methods={methods}")
     print(f"[compare] {len(block_tokens)} blocked artist tokens")
     if args.num_cues != CUE_TOKENS:

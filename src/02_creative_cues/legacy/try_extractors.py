@@ -1,25 +1,28 @@
-"""try_extractors.py — quick look at cues from each extraction method.
+"""legacy/try_extractors.py — quick look at cues from each extraction method.
 
 Runs: extract -> normalize, then prints the cleaned cue vocab for each method.
-Keep --limit small (llm + keybert run per-song).
+Keep --limit small (llm + keybert run per-song). Ad-hoc debug script, not part
+of the production or comparison pipelines.
 
 Usage (from project root, with venv):
-    .venv/Scripts/python.exe try_extractors.py
-    .venv/Scripts/python.exe try_extractors.py --limit 80 --methods tfidf,yake,keybert,llm
+    .venv/Scripts/python.exe src/02_creative_cues/legacy/try_extractors.py
+    .venv/Scripts/python.exe src/02_creative_cues/legacy/try_extractors.py --limit 80 --methods tfidf,yake,keybert,llm
 """
 
 import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
-sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))               # 02_creative_cues/ (siblings)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "00_data_schema"))
 
 import cue_extractors           # noqa: E402
 import cue_normalize            # noqa: E402
-from schema import CatalogItem  # noqa: E402
+import data_loading              # noqa: E402
+
+CUE_DIR = Path(__file__).resolve().parents[1]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--limit", type=int, default=60)
@@ -32,17 +35,7 @@ parser.add_argument("--min-df", type=int, default=5,
 args = parser.parse_args()
 
 # --- load catalog + lyrics ---
-with open(os.path.join(BASE, "data", "dataset", "catalog_metadata.json"), encoding="utf-8") as f:
-    raw = json.load(f)
-items = [
-    CatalogItem(**{k: v for k, v in e.items() if k in CatalogItem.__dataclass_fields__})
-    for e in list(raw.values())[:args.limit]
-]
-lyrics = {}
-for it in items:
-    p = os.path.join(BASE, "data", "lyrics", "spotify", f"{it.item_id}.txt")
-    if os.path.isfile(p):
-        lyrics[it.item_id] = open(p, encoding="utf-8", errors="ignore").read()
+items, lyrics = data_loading.load_catalog_and_lyrics(args.limit)
 print(f"[try] {len(items)} songs, {len(lyrics)} with lyrics\n")
 
 # --- run each method ---
@@ -55,8 +48,8 @@ for method in [m.strip() for m in args.methods.split(",") if m.strip()]:
                                                    min_df=args.min_df, verbose=True)
         real = [c for c in res["vocab"][1:] if not c.startswith("<pad_")]
         # save full cleaned vocab for browsing
-        outp = os.path.join(BASE, "src", "02_creative_cues", "outputs", method, "cue_vocab_preview.json")
-        os.makedirs(os.path.dirname(outp), exist_ok=True)
+        outp = CUE_DIR / "outputs" / method / "cue_vocab_preview.json"
+        outp.parent.mkdir(parents=True, exist_ok=True)
         json.dump(real, open(outp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print(f"[try] {len(real)} real cues -> {outp}")
         print(f"[try] first {args.show}: {real[:args.show]}\n")

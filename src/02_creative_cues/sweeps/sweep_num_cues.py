@@ -13,25 +13,24 @@ Requires OPENAI_API_KEY (the decoder). One decode call per (N, song); cheap on
 gpt-4o-mini and cached by prompt hash.
 
 Usage:
-  .venv/Scripts/python.exe sweep_num_cues.py --method tfidf --limit 300 \
+  .venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_num_cues.py --method tfidf --limit 300 \
       --eval-sample 60 --num-cues 0,3,6,9,12 \
       --min-df 5 --dedup-threshold 0.92 --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
-sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "00_data_schema"))
 
 import numpy as np       # noqa: E402
 import cue_extractors    # noqa: E402
@@ -40,22 +39,9 @@ import cue_lyrics        # noqa: E402
 import cue_eval          # noqa: E402
 import cue_clients       # noqa: E402
 import cue_io            # noqa: E402
-from schema import CatalogItem  # noqa: E402
+import data_loading      # noqa: E402
 
-OUT_DIR = os.path.join(BASE, "src", "02_creative_cues", "outputs", "experiments")
-
-
-def load_data(limit):
-    with open(os.path.join(BASE, "data", "dataset", "catalog_metadata.json"), encoding="utf-8") as f:
-        raw = json.load(f)
-    items = [CatalogItem(**{k: v for k, v in e.items() if k in CatalogItem.__dataclass_fields__})
-             for e in list(raw.values())[:limit]]
-    lyrics = {}
-    for it in items:
-        p = os.path.join(BASE, "data", "lyrics", "spotify", f"{it.item_id}.txt")
-        if os.path.isfile(p):
-            lyrics[it.item_id] = open(p, encoding="utf-8", errors="ignore").read()
-    return items, lyrics
+OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "experiments")
 
 
 def _song_text(item, lyrics, cap=600):
@@ -114,10 +100,9 @@ def main():
     ns = [int(x) for x in args.num_cues.split(",") if x.strip()]
     cue_eval.set_score_chars(args.score_chars)
 
-    items, lyrics = load_data(args.limit)
+    items, lyrics = data_loading.load_catalog_and_lyrics(args.limit)
     catalog_by_id = {it.item_id: it for it in items}
-    lyrics_proc = {iid: cue_lyrics.preprocess_lyrics(t, args.lyrics_mode, args.lyrics_cap)
-                   for iid, t in lyrics.items()}
+    lyrics_proc = data_loading.build_lyrics_proc(lyrics, args.lyrics_mode, args.lyrics_cap)
     block = cue_normalize.build_block_tokens(items)
     tag = cue_lyrics.cache_tag(args.lyrics_mode, args.lyrics_cap)
 

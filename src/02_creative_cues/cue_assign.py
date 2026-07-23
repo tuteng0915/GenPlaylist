@@ -12,7 +12,7 @@ distance"):
 This reuses the cue embeddings already produced by cue_normalize (no recompute)
 and embeds song text once with the SAME backend, so cues and songs share a space.
 
-Output is a {item_id: CueMappingEntry} dict — the exact format cue_mining.export_outputs
+Output is a {item_id: CueMappingEntry} dict — the exact format cue_export.export_outputs
 and CueMappingEntry.load_mapping() consume, so the new pipeline plugs straight into
 the existing schema contract.
 """

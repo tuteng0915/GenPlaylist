@@ -6,46 +6,34 @@ shared/cached, so this is fast and makes zero changes to run_compare or the
 pipeline modules — it just imports their functions.
 
 Usage:
-  .venv/Scripts/python.exe sweep_cleaning.py --method tfidf --limit 1000 \
+  .venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_cleaning.py --method tfidf --limit 1000 \
       --lyrics-mode dedup --lyrics-cap 2000 --top-n 60 \
       --min-df 2,3,5,10 --dedup-threshold 0.90,0.92,0.95,1.0
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
-sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
+# This file lives at <repo_root>/src/02_creative_cues/sweeps/; its cue_*.py
+# siblings live one directory up, in 02_creative_cues/ itself.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "00_data_schema"))
 
 import cue_extractors   # noqa: E402
 import cue_normalize    # noqa: E402
 import cue_lyrics       # noqa: E402
 import cue_io           # noqa: E402
-from schema import CatalogItem  # noqa: E402
+import data_loading     # noqa: E402
 
-OUT_DIR = os.path.join(BASE, "src", "02_creative_cues", "outputs", "experiments")
-
-
-def load_data(limit):
-    with open(os.path.join(BASE, "data", "dataset", "catalog_metadata.json"), encoding="utf-8") as f:
-        raw = json.load(f)
-    items = [CatalogItem(**{k: v for k, v in e.items() if k in CatalogItem.__dataclass_fields__})
-             for e in list(raw.values())[:limit]]
-    lyrics = {}
-    for it in items:
-        p = os.path.join(BASE, "data", "lyrics", "spotify", f"{it.item_id}.txt")
-        if os.path.isfile(p):
-            lyrics[it.item_id] = open(p, encoding="utf-8", errors="ignore").read()
-    return items, lyrics
+OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "experiments")
 
 
 def main():
@@ -64,9 +52,8 @@ def main():
     min_dfs = [int(x) for x in args.min_df.split(",") if x.strip()]
     dedups = [float(x) for x in args.dedup_threshold.split(",") if x.strip()]
 
-    items, lyrics = load_data(args.limit)
-    lyrics_proc = {iid: cue_lyrics.preprocess_lyrics(t, args.lyrics_mode, args.lyrics_cap)
-                   for iid, t in lyrics.items()}
+    items, lyrics = data_loading.load_catalog_and_lyrics(args.limit)
+    lyrics_proc = data_loading.build_lyrics_proc(lyrics, args.lyrics_mode, args.lyrics_cap)
     block = cue_normalize.build_block_tokens(items)
     tag = cue_lyrics.cache_tag(args.lyrics_mode, args.lyrics_cap)
     print(f"[sweep] method={args.method} limit={args.limit} lyrics-mode={args.lyrics_mode} "

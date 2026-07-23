@@ -6,7 +6,7 @@ Shows how the cue vocabulary grows with corpus size. Additive: imports the pipel
 functions and changes nothing else.
 
 Usage:
-  .venv/Scripts/python.exe sweep_corpus_size.py --methods tfidf,yake \
+  .venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_corpus_size.py --methods tfidf,yake \
       --limits 100,300,500,1000 --min-df 5 --dedup-threshold 0.92 \
       --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 
@@ -15,53 +15,31 @@ expensive per song, so only sweep those over limits you have cached (or expect c
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
-sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "00_data_schema"))
 
 import cue_extractors   # noqa: E402
 import cue_normalize    # noqa: E402
 import cue_lyrics       # noqa: E402
 import cue_io           # noqa: E402
-from schema import CatalogItem  # noqa: E402
+import data_loading     # noqa: E402
 
-OUT_DIR = os.path.join(BASE, "src", "02_creative_cues", "outputs", "experiments")
-_CATALOG = None
-
-
-def _catalog():
-    global _CATALOG
-    if _CATALOG is None:
-        with open(os.path.join(BASE, "data", "dataset", "catalog_metadata.json"), encoding="utf-8") as f:
-            _CATALOG = list(json.load(f).items())
-    return _CATALOG
-
-
-def load_data(limit):
-    items = [CatalogItem(**{k: v for k, v in e.items() if k in CatalogItem.__dataclass_fields__})
-             for _iid, e in _catalog()[:limit]]
-    lyrics = {}
-    for it in items:
-        p = os.path.join(BASE, "data", "lyrics", "spotify", f"{it.item_id}.txt")
-        if os.path.isfile(p):
-            lyrics[it.item_id] = open(p, encoding="utf-8", errors="ignore").read()
-    return items, lyrics
+OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "experiments")
 
 
 def run_one(method, limit, args, tag):
-    items, lyrics = load_data(limit)
-    lyrics_proc = {iid: cue_lyrics.preprocess_lyrics(t, args.lyrics_mode, args.lyrics_cap)
-                   for iid, t in lyrics.items()}
+    items, lyrics = data_loading.load_catalog_and_lyrics(limit)
+    lyrics_proc = data_loading.build_lyrics_proc(lyrics, args.lyrics_mode, args.lyrics_cap)
     block = cue_normalize.build_block_tokens(items)
     raw = cue_extractors.extract_raw_cues(items, lyrics_proc, method=method,
                                           force=args.force, top_n=args.top_n, cache_tag=tag)
