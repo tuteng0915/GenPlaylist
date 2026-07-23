@@ -263,21 +263,29 @@ class CueMappingEntry:
     item_id: str
     cue_ids: list[int]   # TODO: required 6 items (WP-B deliverable)
 
-    def validate(self):
-        assert len(self.cue_ids) == 6, \
-            f"Expected 6 cues for item '{self.item_id}', got {len(self.cue_ids)}"
+    def validate(self, n_cues: int = CUE_TOKENS):
+        """n_cues: expected cue count. Defaults to the CUE_TOKENS=6 WP-D contract;
+        pass the actual count for item2cues.json files produced with a non-default
+        --num-cues (run_compare.py) so validation checks against the right length."""
+        assert len(self.cue_ids) == n_cues, \
+            f"Expected {n_cues} cues for item '{self.item_id}', got {len(self.cue_ids)}"
         assert all(0 <= c < CUE_VOCAB_SIZE for c in self.cue_ids), \
             f"Cue ID out of [0, {CUE_VOCAB_SIZE}) for item '{self.item_id}': {self.cue_ids}"
 
     @staticmethod
-    def load_mapping(item2cues_path: str) -> dict[str, "CueMappingEntry"]:
-        """Load item2cues.json → {item_id: CueMappingEntry}.  Validates all entries."""
+    def load_mapping(item2cues_path: str, n_cues: int = CUE_TOKENS) -> dict[str, "CueMappingEntry"]:
+        """Load item2cues.json → {item_id: CueMappingEntry}.  Validates all entries.
+
+        n_cues: expected cue count per item (default CUE_TOKENS=6, the WP-D contract).
+        Pass the value used to produce the file if it came from a run_compare.py
+        --num-cues run that overrode the default.
+        """
         with open(item2cues_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
         out = {}
         for item_id, cue_ids in raw.items():
             e = CueMappingEntry(item_id=str(item_id), cue_ids=cue_ids)
-            e.validate()
+            e.validate(n_cues=n_cues)
             out[str(item_id)] = e
         return out
 

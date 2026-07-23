@@ -422,6 +422,16 @@ def random_cues_by_id(vocab, sample_ids, n_cues: int = 6, seed: int = 0) -> dict
     return {iid: rng.sample(real, k) for iid in sample_ids}
 
 
+def no_cues_by_id(sample_ids) -> dict[str, list[str]]:
+    """Metadata-only floor: zero cues. _decode_prompt renders an empty cue list as
+    "(none)", so the decoder receives nothing but genre/mood (title/artist are
+    already withheld from every condition, see _decode_prompt). This isolates what
+    cues of ANY kind — even random ones — add over metadata alone, which the
+    `random` floor (wrong-but-present cues) doesn't measure on its own.
+    """
+    return {iid: [] for iid in sample_ids}
+
+
 _ORACLE_SYSTEM = (
     "You extract creative cues from song lyrics for a music generation system. "
     "List concrete imagery words, cultural allusions, and narrative motifs actually "

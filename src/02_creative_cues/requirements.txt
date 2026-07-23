@@ -1,0 +1,35 @@
+# WP-B (Creative Cue Mining) — Python dependencies
+# Scoped to WP-B only; the project-root requirements.txt covers the WP-D backbone.
+# CPU-only is sufficient for WP-B.
+#
+# After pip install, also fetch the models the code uses:
+#   python -m spacy download en_core_web_sm     # POS filter (preferred backend)
+#   MiniLM / mpnet / roberta-large download automatically on first use (HuggingFace cache)
+#
+# Optional groups are marked: the pipeline runs without them, with reduced functionality.
+
+# --- Core (always required) ---
+numpy>=1.24
+scikit-learn>=1.3            # TF-IDF extractor + char-ngram fallback embedder
+sentence-transformers>=2.2   # MiniLM/mpnet embeddings: assignment, semantic dedup, STS cosine
+transformers>=4.38           # T5 tokenizer (step-0 cue canonicalization); also backs the above
+torch>=2.2                   # backs sentence-transformers / keybert / bert-score
+                             #   NOTE: install a CPU or matching-CUDA build.
+                             #   Do NOT use the '+cu121' pin here (not on PyPI). If needed:
+                             #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+yake>=0.4.8                  # YAKE extractor
+
+# --- POS filter (need ONE backend; spaCy preferred, else NLTK, else built-in heuristic) ---
+spacy>=3.7                   # then: python -m spacy download en_core_web_sm
+nltk>=3.8                    # alternative POS backend (+ averaged_perceptron_tagger data)
+
+# --- Extraction method: KeyBERT (only if using --methods ...,keybert) ---
+keybert>=0.8
+
+# --- LLM features (llm extractor, oracle, reconstruction decoder, OpenAI retrieval embeddings) ---
+openai>=1.0                  # requires OPENAI_API_KEY (e.g. in a project-root .env)
+
+# --- Evaluation metrics ---
+rouge-score>=0.1.2           # ROUGE — Level 1 grounding + Level 3 reconstruction
+sacrebleu>=2.3               # BLEU — Level 3
+bert-score>=0.3.13           # BERTScore — Level 3 (downloads roberta-large on first use)

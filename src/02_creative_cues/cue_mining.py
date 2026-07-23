@@ -556,7 +556,7 @@ def compute_coverage_stats(
 
     Metrics
     -------
-    - coverage_rate  : fraction of items with at least 1 non-unk cue
+    - coverage_rate  : fraction of items with zero '<unk>' slots (fully assigned)
     - unk_rate       : mean fraction of cue slots that are '<unk>' (index 0)
     - vocab_coverage : fraction of vocab entries used by at least 1 item
     - top10_cues     : list of (cue_string, count) for the 10 most used cues
@@ -586,7 +586,9 @@ def compute_coverage_stats(
         if has_unk:
             items_with_unk += 1
 
-    total_slots = n_items * CUE_TOKENS
+    # Sum actual per-entry lengths rather than assuming CUE_TOKENS: item2cues may come
+    # from a run_compare.py --num-cues override, so slot count isn't always 6/item.
+    total_slots = sum(len(entry.cue_ids) for entry in item2cues.values())
     coverage_rate = 1.0 - items_with_unk / n_items
     unk_rate = unk_slots / total_slots
 

@@ -32,6 +32,7 @@ from __future__ import annotations
 import collections
 import math
 import os
+import random
 import re
 from typing import Callable, Optional
 
@@ -152,6 +153,28 @@ def normalize_raw_cues(
             token_ids_of[canonical] = ids
         normalized[item_id] = cleaned
     return normalized, token_ids_of
+
+
+def split_items(items, test_frac: float = 0.15, seed: int = 42):
+    """Deterministic item-level train/test split (song-level, not playlist-level).
+
+    data/dataset/splits/{train,test}.txt are PLAYLIST splits: because songs repeat
+    across playlists, ~100% of test.txt's unique items already appear in train.txt
+    (verified 4529/4529 overlap on the current corpus) — unusable for a held-out
+    vocabulary eval, since "held-out" songs would already have shaped the vocab via
+    a different playlist. This instead splits on item_id so no song is in both.
+
+    Returns (train_items, test_items); item order within each is unchanged from
+    the input (only membership is decided by the shuffle).
+    """
+    ids = sorted(it.item_id for it in items)   # sort first: deterministic regardless of input order
+    rng = random.Random(seed)
+    rng.shuffle(ids)
+    n_test = max(1, round(len(ids) * test_frac))
+    test_ids = set(ids[:n_test])
+    train_items = [it for it in items if it.item_id not in test_ids]
+    test_items = [it for it in items if it.item_id in test_ids]
+    return train_items, test_items
 
 
 def build_block_tokens(catalog) -> set[str]:
@@ -363,68 +386,114 @@ def idf_score(cue: str, df: collections.Counter, n_docs: int) -> float:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def build_vocab_normalized(
+RANK_METHODS = ("idf", "df", "df_idf", "band", "random", "cluster")
+
+
+def select_indices(candidates, emb, df, n_docs, n_take,
+                   rank_by: str = "idf", seed: int = 0,
+                   band_target: float = 0.02):
+    """Stage 5 — choose which candidates become the vocabulary.
+
+    Returns the list of indices into `candidates` to keep, in vocabulary order.
+    This is the ONLY stage that differs between ranking arms; stages 0-4 upstream
+    are identical, so arms can share one cleaned pool.
+
+      idf     : rarest first (log(N/(1+df)))            — most discriminative per cue
+      df      : most frequent first                      — frequency-only extreme
+      df_idf  : df * idf                                 — peaks at mid-frequency cues
+      band    : closest to a target prevalence df/N      — scale-free (corpus-invariant)
+      random  : uniform random sample (seeded)           — ablation floor, ranking removed
+      cluster : k-means over embeddings, one representative per cluster — spanning codebook
+    """
+    n = len(candidates)
+    if n == 0:
+        return []
+    n_take = min(n_take, n)
+
+    if rank_by == "random":
+        rng = np.random.default_rng(seed)
+        return list(rng.permutation(n)[:n_take])
+
+    if rank_by == "cluster":
+        from sklearn.cluster import MiniBatchKMeans
+        k = min(n_take, n)
+        weights = np.array([float(df[c]) for c in candidates], dtype=np.float64)
+        # batch_size MUST exceed n_clusters, else many clusters stay empty and the
+        # arm silently ends up with a smaller vocabulary than the other arms.
+        batch = min(n, max(1024, 3 * k))
+        km = MiniBatchKMeans(n_clusters=k, random_state=seed, n_init=3,
+                             batch_size=batch)
+        km.fit(emb, sample_weight=weights)
+        labels = km.labels_
+        chosen: list[int] = []
+        for c in range(k):
+            members = np.where(labels == c)[0]
+            if members.size == 0:
+                continue                       # empty cluster -> vocab slightly < k
+            d = np.linalg.norm(emb[members] - km.cluster_centers_[c], axis=1)
+            chosen.append(int(members[int(np.argmin(d))]))   # nearest to centroid
+        # order representatives by df*idf so vocab index still reflects usefulness
+        chosen.sort(key=lambda i: df[candidates[i]] * idf_score(candidates[i], df, n_docs),
+                    reverse=True)
+        return chosen
+
+    # score-based arms
+    if rank_by == "idf":
+        scores = np.array([idf_score(c, df, n_docs) for c in candidates])
+    elif rank_by == "df":
+        scores = np.array([float(df[c]) for c in candidates])
+    elif rank_by == "df_idf":
+        scores = np.array([df[c] * idf_score(c, df, n_docs) for c in candidates])
+    elif rank_by == "band":
+        tgt = math.log(band_target)
+        scores = np.array([-abs(math.log(max(df[c], 1) / max(n_docs, 1)) - tgt)
+                           for c in candidates])
+    else:
+        raise ValueError(f"Unknown rank_by '{rank_by}'. Choose from {RANK_METHODS}.")
+    return list(np.argsort(scores)[::-1][:n_take])
+
+
+def clean_candidates(
     raw_cues: dict[str, list[str]],
-    vocab_size: int = 2048,
     min_df: int = 5,
     max_df_frac: float = 0.3,
     dedup_threshold: float = 0.92,
     block_tokens: Optional[set[str]] = None,
     verbose: bool = True,
 ) -> dict:
-    """Run the full Phase-1 pipeline.
+    """Stages 0-4 only: normalize -> df-band -> POS -> blocklist -> embed -> dedup.
 
-    Returns a dict with:
-      vocab            : list[str] of length vocab_size, vocab[0] == "<unk>"
-      embeddings       : np.ndarray (vocab_size-1, d) for cues[1:] (None for <unk>)
-      embedder_backend : which embedder was used
-      stats            : per-stage survivor counts
+    Returns {candidates, emb, df, n_docs, backend, stats}. Ranking (stage 5) is
+    separate so several ranking arms can share one identical cleaned pool.
     """
-    # 0. T5 tokenize (dedup on token identity) — token_ids_of feeds step 3
     raw_cues, token_ids_of = normalize_raw_cues(raw_cues)
     df, n_docs = compute_df(raw_cues)
     candidates = list(df.keys())
     stats = {"raw_candidates": len(candidates), "n_docs": n_docs}
 
-    # 1. df-band filter
     candidates = df_band_filter(candidates, df, n_docs, min_df, max_df_frac)
     stats["after_df_band"] = len(candidates)
 
-    # 2. POS filter
     pos_filter = _make_pos_filter()
     candidates = pos_filter(candidates)
     stats["after_pos"] = len(candidates)
 
-    # 2b. blocklist filter (boilerplate + artist-only cues)
     candidates = _blocklist_filter(candidates, block_tokens or set())
     stats["after_blocklist"] = len(candidates)
 
-    # Sort by IDF descending BEFORE dedup so the most discriminative survives a merge
+    # IDF pre-sort so dedup keeps the most discriminative representative.
+    # Kept fixed for ALL ranking arms so the cleaned pool is identical.
     candidates.sort(key=lambda c: idf_score(c, df, n_docs), reverse=True)
 
-    # 3. embed (sentence encoder / MiniLM; token_ids_of accepted but unused)
     embed_fn, backend = _make_embedder(token_ids_of)
     emb = embed_fn(candidates) if candidates else np.zeros((0, 1), dtype=np.float32)
 
-    # 4. semantic dedup
-    candidates, emb = semantic_dedup(candidates, emb, dedup_threshold)
+    if dedup_threshold < 1.0:
+        candidates, emb = semantic_dedup(candidates, emb, dedup_threshold)
+        stats["dedup_skipped"] = False
+    else:
+        stats["dedup_skipped"] = True
     stats["after_dedup"] = len(candidates)
-
-    # 5. top-(vocab_size-1) by IDF (already IDF-sorted; dedup preserved order)
-    n_take = vocab_size - 1
-    top = candidates[:n_take]
-    top_emb = emb[:n_take]
-
-    # pad if corpus too small to fill the vocab
-    if len(top) < n_take:
-        pad = [f"<pad_{i}>" for i in range(n_take - len(top))]
-        top = top + pad
-        if top_emb.shape[0] < n_take:
-            d = top_emb.shape[1] if top_emb.shape[0] else 1
-            top_emb = np.vstack([top_emb, np.zeros((n_take - top_emb.shape[0], d), np.float32)])
-
-    vocab = [UNK_CUE_STRING] + top
-    stats["final_vocab"] = len(vocab)
 
     if verbose:
         print(f"[normalize] embedder: {backend}")
@@ -433,15 +502,69 @@ def build_vocab_normalized(
               f"(kept {min_df} <= df <= {max_df_frac:.0%} of {n_docs})")
         print(f"[normalize] after POS      : {stats['after_pos']}")
         print(f"[normalize] after blocklist: {stats['after_blocklist']} (boilerplate/artist)")
-        print(f"[normalize] after dedup    : {stats['after_dedup']} (cos > {dedup_threshold})")
-        print(f"[normalize] final vocab    : {stats['final_vocab']} (incl <unk>)")
+        if stats.get("dedup_skipped"):
+            print("[normalize] semantic dedup : SKIPPED")
+        else:
+            print(f"[normalize] after dedup    : {stats['after_dedup']} (cos > {dedup_threshold})")
 
-    return {
-        "vocab": vocab,
-        "embeddings": top_emb,           # aligns with vocab[1:]
-        "embedder_backend": backend,
-        "stats": stats,
-    }
+    return {"candidates": candidates, "emb": emb, "df": df, "n_docs": n_docs,
+            "backend": backend, "stats": stats}
+
+
+def assemble_vocab(pool: dict, vocab_size: int = 2048, rank_by: str = "idf",
+                   seed: int = 0, band_target: float = 0.02, verbose: bool = True) -> dict:
+    """Stage 5 + assembly: rank/select from a cleaned pool and build the vocab."""
+    candidates, emb = pool["candidates"], pool["emb"]
+    df, n_docs = pool["df"], pool["n_docs"]
+    stats = dict(pool["stats"])
+    n_take = vocab_size - 1
+
+    idx = select_indices(candidates, emb, df, n_docs, n_take,
+                         rank_by=rank_by, seed=seed, band_target=band_target)
+    top = [candidates[i] for i in idx]
+    top_emb = emb[idx] if len(idx) else np.zeros((0, emb.shape[1] if emb.size else 1), np.float32)
+    stats["rank_by"] = rank_by
+    stats["selected"] = len(top)
+
+    if len(top) < n_take:
+        top = top + [f"<pad_{i}>" for i in range(n_take - len(top))]
+        d = top_emb.shape[1] if top_emb.shape[0] else 1
+        top_emb = np.vstack([top_emb, np.zeros((n_take - top_emb.shape[0], d), np.float32)])
+
+    vocab = [UNK_CUE_STRING] + top
+    stats["final_vocab"] = len(vocab)
+    if verbose:
+        print(f"[normalize] rank_by={rank_by} selected {stats['selected']} "
+              f"-> final vocab {stats['final_vocab']} (incl <unk>)")
+    return {"vocab": vocab, "embeddings": top_emb,
+            "embedder_backend": pool["backend"], "stats": stats}
+
+
+def build_vocab_normalized(
+    raw_cues: dict[str, list[str]],
+    vocab_size: int = 2048,
+    min_df: int = 5,
+    max_df_frac: float = 0.3,
+    dedup_threshold: float = 0.92,
+    block_tokens: Optional[set[str]] = None,
+    rank_by: str = "idf",
+    rank_seed: int = 0,
+    band_target: float = 0.02,
+    verbose: bool = True,
+) -> dict:
+    """Full pipeline (stages 0-5). Thin wrapper over clean_candidates + assemble_vocab.
+
+    Returns a dict with:
+      vocab            : list[str] of length vocab_size, vocab[0] == "<unk>"
+      embeddings       : np.ndarray (vocab_size-1, d) aligned with vocab[1:]
+      embedder_backend : which embedder was used
+      stats            : per-stage survivor counts (+ rank_by)
+    """
+    pool = clean_candidates(raw_cues, min_df=min_df, max_df_frac=max_df_frac,
+                            dedup_threshold=dedup_threshold, block_tokens=block_tokens,
+                            verbose=verbose)
+    return assemble_vocab(pool, vocab_size=vocab_size, rank_by=rank_by,
+                          seed=rank_seed, band_target=band_target, verbose=verbose)
 
 
 # ---------------------------------------------------------------------------

@@ -79,10 +79,9 @@ def _read_cached_raw(method: str, n_items: int, tag: str = "") -> Optional[dict[
 
 
 def _write_raw(method: str, n_items: int, raw: dict[str, list[str]], tag: str = "") -> str:
+    import cue_io
     path = _cache_path(method, n_items, tag)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(raw, f, ensure_ascii=False)
+    cue_io.atomic_write_json(path, raw)   # atomic: safe for concurrent runs sharing the cache
     print(f"[extract:{method}] wrote raw cues for {len(raw)} items -> {path}")
     return path
 

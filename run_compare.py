@@ -1,7 +1,8 @@
 """run_compare.py — WP-B Phase 5: end-to-end multi-method comparison + report.
 
 For each extraction method:
-    extract raw cues -> normalize vocab -> assign 6 cues/song -> export -> evaluate
+    extract raw cues -> normalize vocab -> assign N cues/song -> export -> evaluate
+    (N = --num-cues, default CUE_TOKENS=6, the WP-D schema contract)
 
 Then writes one comparison report:
     src/02_creative_cues/outputs/comparison_report.md
@@ -12,6 +13,8 @@ Usage (from project root, with venv):
         --eval-sample 200 --level3
     .venv/Scripts/python.exe run_compare.py --methods tfidf,yake,keybert,llm \
         --llm-batch
+    .venv/Scripts/python.exe run_compare.py --methods tfidf,yake \
+        --held-out-eval --test-frac 0.15
 """
 
 import argparse
@@ -28,6 +31,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE, "src", "02_creative_cues"))
 sys.path.insert(0, os.path.join(BASE, "src", "00_data_schema"))
 
+import uuid                     # noqa: E402
 import cue_extractors          # noqa: E402
 import cue_normalize           # noqa: E402
 import cue_assign              # noqa: E402
@@ -35,10 +39,15 @@ import cue_eval                # noqa: E402
 import cue_clients             # noqa: E402
 import cue_lyrics              # noqa: E402
 import cue_mining              # noqa: E402
-from schema import CatalogItem  # noqa: E402
+import cue_io                  # noqa: E402
+from schema import CatalogItem, CUE_TOKENS  # noqa: E402
 from datetime import datetime   # noqa: E402
 
 OUT_ROOT = os.path.join(BASE, "src", "02_creative_cues", "outputs")
+# Per-run output folder (set in main). Shared caches stay under OUT_ROOT; every
+# run's own artifacts (reports + per-method vocab/item2cues) go under RUN_DIR so
+# concurrent runs never collide.
+RUN_DIR = OUT_ROOT
 
 
 def load_data(limit):
@@ -57,31 +66,46 @@ def load_data(limit):
 
 
 def finish_method_from_raw(method, raw, items, lyrics_proc, min_df, block_tokens,
-                           dedup_threshold=0.92):
+                           dedup_threshold=0.92, rank_by="idf", num_cues=CUE_TOKENS):
     """normalize -> assign -> export. Returns (vocab, item2cues, norm_stats, cue_emb).
 
     lyrics_proc = preprocessed lyrics used for cue assignment.
     dedup_threshold: cosine above which two cues are merged in semantic dedup
                      (higher = fewer merges = larger vocabulary).
+    num_cues: cues assigned per song. Defaults to CUE_TOKENS=6, the schema contract
+              CueMappingEntry validates against and WP-D expects. A different value
+              still validates and exports fine (CueMappingEntry.validate/load_mapping
+              now take a matching n_cues) but the output item2cues.json only round-trips
+              through the default loader if that loader is told the same n_cues.
     """
     norm = cue_normalize.build_vocab_normalized(raw, vocab_size=2048, min_df=min_df,
                                                 dedup_threshold=dedup_threshold,
+                                                rank_by=rank_by,
                                                 block_tokens=block_tokens, verbose=True)
     vocab, cue_emb = norm["vocab"], norm["embeddings"]
-    item2cues = cue_assign.assign_all(items, lyrics_proc, vocab, cue_emb, verbose=True)
-    out_dir = os.path.join(OUT_ROOT, method)
+    item2cues = cue_assign.assign_all(items, lyrics_proc, vocab, cue_emb,
+                                      n_cues=num_cues, verbose=True)
+    out_dir = os.path.join(RUN_DIR, "methods", method)
     cue_mining.export_outputs(vocab, item2cues, out_dir)
     return vocab, item2cues, norm["stats"], cue_emb
 
 
 def run_method(method, items, lyrics_proc, min_df, force, block_tokens, top_n, cache_tag,
-               dedup_threshold=0.92):
-    """extract -> normalize -> assign -> export. Returns (vocab, item2cues, norm_stats, cue_emb)."""
+               dedup_threshold=0.92, rank_by="idf", vocab_items=None, num_cues=CUE_TOKENS):
+    """extract -> normalize -> assign -> export. Returns (vocab, item2cues, norm_stats, cue_emb).
+
+    vocab_items: corpus used for vocabulary building (raw cue extraction + df/idf/dedup).
+    Defaults to `items`. Pass a train-only split for --held-out-eval so the vocabulary
+    never sees held-out test songs; cues are still assigned to every item in `items`
+    (item2cues.json stays the full deliverable either way).
+    """
     print(f"\n########## METHOD: {method} ##########")
-    raw = cue_extractors.extract_raw_cues(items, lyrics_proc, method=method, force=force,
+    vocab_source = items if vocab_items is None else vocab_items
+    raw = cue_extractors.extract_raw_cues(vocab_source, lyrics_proc, method=method, force=force,
                                           top_n=top_n, cache_tag=cache_tag)
     return finish_method_from_raw(method, raw, items, lyrics_proc, min_df, block_tokens,
-                                  dedup_threshold=dedup_threshold)
+                                  dedup_threshold=dedup_threshold, rank_by=rank_by,
+                                  num_cues=num_cues)
 
 
 def evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id, lyrics_ref,
@@ -99,23 +123,32 @@ def evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id, ly
 
 
 def run_level3_conditions(rows, vocabs, mappings, catalog_by_id, lyrics_ref,
-                          sample_ids, use_batch, poll_s, timeout_s):
-    """Bracketed Level 3 ablation: random floor < methods < oracle ceiling.
+                          sample_ids, use_batch, poll_s, timeout_s, num_cues=CUE_TOKENS):
+    """Bracketed Level 3 ablation: metadata-only floor < random floor < methods < oracle ceiling.
 
-    Returns (floor_metrics, method_metrics_by_name, oracle_metrics). All conditions
-    share the decoder (title/artist withheld); only the cue content differs.
+    Returns (floor_metrics, method_metrics_by_name, oracle_metrics, oracle_cues_by_id,
+    metadata_floor_metrics). All conditions share the decoder (title/artist withheld)
+    and the same cue budget (num_cues); only the cue content differs. oracle_cues_by_id
+    is returned (not just its aggregate score) so callers can display the oracle's
+    actual cue strings alongside each method's assigned cues.
+
+    metadata_floor uses ZERO cues (only genre/mood reach the decoder) — a purer floor
+    than `random`, which still gives the decoder 6 real (just irrelevant) cues. The gap
+    between metadata_floor and random isolates the value of having ANY cues at all,
+    separate from having the RIGHT cues.
     """
     first_vocab = next(iter(vocabs.values()))
     conds = {
-        "random": cue_eval.random_cues_by_id(first_vocab, sample_ids),
-        "oracle": cue_eval.oracle_cues_by_id(catalog_by_id, lyrics_ref, sample_ids),
+        "random": cue_eval.random_cues_by_id(first_vocab, sample_ids, n_cues=num_cues),
+        "metadata_only": cue_eval.no_cues_by_id(sample_ids),
+        "oracle": cue_eval.oracle_cues_by_id(catalog_by_id, lyrics_ref, sample_ids, n_cues=num_cues),
     }
     for m in rows:
         conds[m] = cue_eval.assigned_cues_by_id(mappings[m], vocabs[m], sample_ids)
 
     results: dict[str, dict] = {}
     if use_batch:
-        print("[compare] submitting Level 3 batches (random, methods, oracle)...")
+        print("[compare] submitting Level 3 batches (random, metadata-only, methods, oracle)...")
         jobs = {tag: cue_eval.submit_reconstruction_batch(
                     catalog_by_id, cues, lyrics_ref, sample_ids, tag)
                 for tag, cues in conds.items()}
@@ -129,8 +162,10 @@ def run_level3_conditions(rows, vocabs, mappings, catalog_by_id, lyrics_ref,
                 catalog_by_id, cues, lyrics_ref, sample_ids)
 
     floor = results.pop("random")
+    metadata_floor = results.pop("metadata_only")
     oracle = results.pop("oracle")
-    return floor, results, oracle
+    oracle_cues = conds["oracle"]
+    return floor, results, oracle, oracle_cues, metadata_floor
 
 
 def main():
@@ -143,6 +178,10 @@ def main():
     ap.add_argument("--dedup-threshold", type=float, default=0.92,
                     help="cosine above which near-duplicate cues are merged in cleaning "
                          "(higher = fewer merges = larger vocabulary)")
+    ap.add_argument("--no-semantic-dedup", action="store_true",
+                    help="skip the semantic dedup step entirely (keep all cues)")
+    ap.add_argument("--rank-by", default="idf", choices=list(cue_normalize.RANK_METHODS),
+                    help="stage-5 vocabulary selection rule")
     ap.add_argument("--lyrics-mode", default="cap", choices=list(cue_lyrics.MODES),
                     help="how lyrics feed extraction/assignment: cap | full | dedup | summarize")
     ap.add_argument("--lyrics-cap", type=int, default=cue_lyrics.DEFAULT_CAP,
@@ -166,9 +205,41 @@ def main():
     ap.add_argument("--llm-batch-timeout-seconds", type=int, default=24 * 60 * 60,
                     help="maximum seconds to wait for the OpenAI Batch job")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--note", default="",
+                    help="free-text note to self, stamped at the top of comparison_report.md "
+                         "(e.g. what this run is testing, caveats to remember)")
+    ap.add_argument("--held-out-eval", action="store_true",
+                    help="build the vocabulary from a train-only item split and score every "
+                         "metric on a disjoint held-out test split, so results reflect "
+                         "generalization instead of in-sample fit. Song-level split (NOT the "
+                         "playlist-level data/dataset/splits/ files, which have ~100%% item "
+                         "overlap between their train/test — see cue_normalize.split_items). "
+                         "Default off: unset, behavior is unchanged from before.")
+    ap.add_argument("--test-frac", type=float, default=0.15,
+                    help="fraction of songs held out for --held-out-eval")
+    ap.add_argument("--split-seed", type=int, default=42,
+                    help="seed for the --held-out-eval item split")
+    ap.add_argument("--num-cues", type=int, default=CUE_TOKENS,
+                    help=f"cues assigned per song (default {CUE_TOKENS}, the CUE_TOKENS schema "
+                         "contract WP-D expects). A different value still runs, validates, and "
+                         "exports item2cues.json fine, but CueMappingEntry.load_mapping() must "
+                         "be called with a matching n_cues to read a non-default file back.")
     args = ap.parse_args()
 
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+    # threshold >= 1.0 makes build_vocab_normalized skip semantic dedup entirely
+    eff_dedup = 1.0 if args.no_semantic_dedup else args.dedup_threshold
+
+    # Per-run output folder: datetime + short random id (unique even for parallel
+    # same-second runs). Shared caches stay under OUT_ROOT; this run's artifacts go here.
+    global RUN_DIR
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
+    RUN_DIR = os.path.join(OUT_ROOT, "runs", run_id)
+    os.makedirs(RUN_DIR, exist_ok=True)
+    cue_io.atomic_write_json(os.path.join(RUN_DIR, "run_config.json"),
+                             {"run_id": run_id, **vars(args)})
+    print(f"[compare] run folder: {RUN_DIR}")
+
     # In full mode, don't clamp the decode target length — match the real song.
     cue_eval.set_max_target_lines(0 if args.lyrics_mode == "full"
                                   else cue_eval.DEFAULT_MAX_TARGET_LINES)
@@ -185,9 +256,36 @@ def main():
                    for iid, t in lyrics_raw.items()}
     print(f"[compare] {len(items)} songs, {len(lyrics_raw)} with lyrics, methods={methods}")
     print(f"[compare] {len(block_tokens)} blocked artist tokens")
+    if args.num_cues != CUE_TOKENS:
+        print(f"[compare] WARNING: --num-cues={args.num_cues} overrides the CUE_TOKENS="
+              f"{CUE_TOKENS} schema contract; item2cues.json from this run needs "
+              f"load_mapping(path, n_cues={args.num_cues}) to read back, and WP-D expects "
+              f"exactly {CUE_TOKENS}.")
 
-    # deterministic eval sample (songs that have real lyrics)
-    sample_ids = [iid for iid in catalog_by_id if lyrics_raw.get(iid, "").strip()][:args.eval_sample]
+    # --held-out-eval: vocabulary is built from train_items only; evaluation (below) is
+    # restricted to test_items so every reported metric reflects generalization to songs
+    # the vocab never saw. vocab_items stays None (= no split) otherwise.
+    train_items = test_items = None
+    test_id_set = None
+    if args.held_out_eval:
+        train_items, test_items = cue_normalize.split_items(
+            items, test_frac=args.test_frac, seed=args.split_seed)
+        test_id_set = {it.item_id for it in test_items}
+        print(f"[compare] held-out eval: {len(train_items)} train / {len(test_items)} test "
+              f"items (test_frac={args.test_frac}, seed={args.split_seed}); vocab built from "
+              f"train only, all metrics scored on test only")
+
+    # deterministic eval sample (songs that have real lyrics, restricted to the held-out
+    # test split if enabled)
+    eval_pool = test_id_set if test_id_set is not None else set(catalog_by_id)
+    sample_ids = [iid for iid in catalog_by_id
+                  if iid in eval_pool and lyrics_raw.get(iid, "").strip()][:args.eval_sample]
+
+    def _eval_view(item2cues):
+        """Restrict item2cues to the held-out test split for evaluation (no-op if disabled)."""
+        if test_id_set is None:
+            return item2cues
+        return {iid: e for iid, e in item2cues.items() if iid in test_id_set}
 
     rows = {}
     vocabs = {}
@@ -198,14 +296,16 @@ def main():
     if args.llm_batch and "llm" in methods:
         print("[compare] submitting LLM extraction batch before other methods...")
         llm_batch_job = cue_extractors.submit_llm_batch(
-            items, lyrics_proc, top_n=args.top_n, force=args.force, cache_tag=cache_tag)
+            train_items if args.held_out_eval else items, lyrics_proc,
+            top_n=args.top_n, force=args.force, cache_tag=cache_tag)
         run_methods = [m for m in methods if m != "llm"]
 
     for method in run_methods:
         vocab, item2cues, nstats, cue_emb = run_method(method, items, lyrics_proc, args.min_df,
                                                        args.force, block_tokens, args.top_n, cache_tag,
-                                                       dedup_threshold=args.dedup_threshold)
-        row = evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id,
+                                                       dedup_threshold=eff_dedup, rank_by=args.rank_by,
+                                                       vocab_items=train_items, num_cues=args.num_cues)
+        row = evaluate_method(method, vocab, _eval_view(item2cues), nstats, cue_emb, catalog_by_id,
                               lyrics_raw, lyrics_proc, sample_ids)
         rows[method] = row
         vocabs[method] = vocab
@@ -221,8 +321,8 @@ def main():
         print("\n########## METHOD: llm ##########")
         vocab, item2cues, nstats, cue_emb = finish_method_from_raw(
             "llm", raw, items, lyrics_proc, args.min_df, block_tokens,
-            dedup_threshold=args.dedup_threshold)
-        row = evaluate_method("llm", vocab, item2cues, nstats, cue_emb, catalog_by_id,
+            dedup_threshold=eff_dedup, rank_by=args.rank_by, num_cues=args.num_cues)
+        row = evaluate_method("llm", vocab, _eval_view(item2cues), nstats, cue_emb, catalog_by_id,
                               lyrics_raw, lyrics_proc, sample_ids)
         rows["llm"] = row
         vocabs["llm"] = vocab
@@ -230,25 +330,29 @@ def main():
 
     # Level 3 bracketed ablation: random floor < methods < oracle ceiling.
     # References are the REAL (unprocessed) lyrics — lyrics_raw.
-    floor = oracle = None
+    floor = oracle = oracle_cues = metadata_floor = None
     if run_level3 and not cue_clients.is_available():
         print("[compare] reconstruction requested but no API key; skipping Level 3.")
     elif run_level3:
-        floor, method_l3, oracle = run_level3_conditions(
+        floor, method_l3, oracle, oracle_cues, metadata_floor = run_level3_conditions(
             rows, vocabs, mappings, catalog_by_id, lyrics_raw, sample_ids,
-            use_batch=args.recon_batch,
+            use_batch=args.recon_batch, num_cues=args.num_cues,
             poll_s=args.llm_batch_poll_seconds, timeout_s=args.llm_batch_timeout_seconds)
         for m, res in method_l3.items():
             rows[m]["level3"] = res
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    split_info = None
+    if args.held_out_eval:
+        split_info = {"n_train": len(train_items), "n_test": len(test_items),
+                      "test_frac": args.test_frac, "seed": args.split_seed}
     write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracle,
-                 args, stamp)
+                 args, run_id, split_info=split_info, oracle_cues=oracle_cues,
+                 metadata_floor=metadata_floor)
 
     # Separate side-by-side original-vs-regenerated lyrics report (Level 3 only)
     if run_level3 and cue_clients.is_available():
         write_reconstruction_report(rows, vocabs, mappings, sample_ids,
-                                    catalog_by_id, lyrics_raw, args, stamp)
+                                    catalog_by_id, lyrics_raw, args, run_id)
 
 
 def write_reconstruction_report(rows, vocabs, mappings, sample_ids, catalog_by_id,
@@ -284,12 +388,9 @@ def write_reconstruction_report(rows, vocabs, mappings, sample_ids, catalog_by_i
             lines.append(f"\n**`{m}` cues:** {', '.join(cue_strings) if cue_strings else '(none)'}\n")
             lines.append("\n```\n" + _clip(gen.strip()) + "\n```\n")
 
-    stamped = os.path.join(OUT_ROOT, f"reconstruction_report_{stamp}.md")
-    latest = os.path.join(OUT_ROOT, "reconstruction_report.md")
-    for path in (stamped, latest):
-        with open(path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-    print(f"[compare] reconstruction samples -> {stamped} (and latest)")
+    path = os.path.join(RUN_DIR, "reconstruction_report.md")
+    cue_io.atomic_write_text(path, "".join(lines))
+    print(f"[compare] reconstruction samples -> {path}")
 
 
 def _bold_best(rows, key, higher=True):
@@ -324,14 +425,36 @@ def _best_method(rows, key, higher=True):
     return (max if higher else min)(cand, key=cand.get)
 
 
-def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracle, args, stamp):
+def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracle, args, stamp,
+                 split_info=None, oracle_cues=None, metadata_floor=None):
     _mode_str = (f"{args.lyrics_mode} (cap {args.lyrics_cap})"
                  if args.lyrics_mode in ("cap", "dedup") else args.lyrics_mode)
 
     # ---- 1. Header ----
     lines = ["# WP-B Cue Extraction — Method Comparison\n",
              f"_Generated {stamp} · {args.limit} songs · eval sample {len(sample_ids)} · "
-             f"min_df {args.min_df} · top_n {args.top_n} · lyrics-mode {_mode_str}_\n"]
+             f"min_df {args.min_df} · top_n {args.top_n} · num_cues {args.num_cues} · "
+             f"lyrics-mode {_mode_str}_\n"]
+
+    # ---- num-cues override banner (optional, --num-cues != CUE_TOKENS) ----
+    if args.num_cues != CUE_TOKENS:
+        lines.append(
+            f"\n> **Non-default cue count:** this run assigned {args.num_cues} cues/song "
+            f"(schema default is {CUE_TOKENS}). item2cues.json here needs "
+            f"`CueMappingEntry.load_mapping(path, n_cues={args.num_cues})` to read back.\n")
+
+    # ---- Held-out eval banner (optional, --held-out-eval) ----
+    if split_info:
+        lines.append(
+            f"\n> **Held-out eval:** vocabulary built from {split_info['n_train']} train "
+            f"songs only; every metric below is scored on {split_info['n_test']} disjoint "
+            f"test songs the vocab never saw (item-level split, test_frac="
+            f"{split_info['test_frac']}, seed={split_info['seed']}). Not the playlist-level "
+            f"`data/dataset/splits/` files.\n")
+
+    # ---- Note to self (optional, --note) ----
+    if args.note.strip():
+        lines.append(f"\n> **Note:** {args.note.strip()}\n")
 
     # ---- 2. TL;DR ----
     has_l3 = bool(oracle) or any(r.get("level3") for r in rows.values())
@@ -381,8 +504,8 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
     # ---- 4. Cue quality ----
     lines += ["\n## 2. Cue quality\n"]
     lines += _table(rows, ["Intra-cos ↓ (target <0.7)"], [("intra_cos_mean", False)])
-    lines.append("\n_Within-item pairwise cosine of each song's 6 cues; lower = more diverse, "
-                 "less redundant cue sets._\n")
+    lines.append(f"\n_Within-item pairwise cosine of each song's {args.num_cues} cues; lower = "
+                 "more diverse, less redundant cue sets._\n")
 
     # ---- 5. Grounding & retrieval ----
     _enc = next((r.get("retrieval_encoder") for r in rows.values() if r.get("retrieval_encoder")), "n/a")
@@ -410,8 +533,8 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
                 if args.score_chars else "full lyrics scored (no length window)")
         lines += ["\n## 4. Reconstruction comparison (downstream usefulness)\n",
                   "Decode lyrics from cues (title/artist withheld), score vs real lyrics. "
-                  "Bracketed **random floor < methods < oracle ceiling** — read deltas above "
-                  "the floor.\n\n",
+                  "Bracketed **no-cues floor < random floor < methods < oracle ceiling** — "
+                  "read deltas above the floors.\n\n",
                   f"_{_win}. Cosine uses `{_sts_enc}` (document-level, length-robust). "
                   "BERTScore is baseline-rescaled, so near/below 0 is expected — read rankings._\n\n",
                   "| Condition | ROUGE-1 ↑ | ROUGE-2 ↑ | ROUGE-L ↑ | BLEU ↑ | BERTScore ↑ | Cosine ↑ |\n",
@@ -422,6 +545,8 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
                     f"{d.get('rougeL_f')} | {d.get('bleu')} | "
                     f"{d.get('bertscore_f1')} | {d.get('sts_cosine')} |\n")
 
+        if metadata_floor:
+            lines.append(_l3_row("no cues (metadata-only floor)", metadata_floor))
         if floor:
             lines.append(_l3_row("random (floor)", floor))
         for m, r in rows.items():
@@ -431,7 +556,9 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
             lines.append(_l3_row("oracle (ceiling)", oracle))
 
     # ---- 7. Qualitative ----
-    lines += ["\n## 5. Qualitative samples (cues per method)\n"]
+    _heading = "## 5. Qualitative samples (cues per method"
+    _heading += ", + oracle ceiling)\n" if oracle_cues is not None else ")\n"
+    lines += [f"\n{_heading}"]
     for iid in sample_ids[:12]:
         item = catalog_by_id[iid]
         lines.append(f"\n**{item.title}** — {item.artist} _( {item.genre} )_\n\n")
@@ -440,6 +567,10 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
             entry = mp.get(iid)
             cues = [v[c] for c in entry.cue_ids if c != 0] if entry else []
             lines.append(f"- `{m}`: {', '.join(cues) if cues else '(unk)'}\n")
+        if oracle_cues is not None:
+            ocues = oracle_cues.get(iid, [])
+            lines.append(f"- `oracle` _(ceiling — LLM cues from real lyrics)_: "
+                         f"{', '.join(ocues) if ocues else '(none)'}\n")
 
     lines += ["\n### Top cues per method (most-assigned)\n"]
     import collections
@@ -457,23 +588,23 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
     lines += [
         "\n## Appendix — metric definitions\n",
         "- **Vocab(real):** non-placeholder cue phrases surviving df-band, POS, blocklist, and semantic dedup.\n",
-        "- **Coverage:** fraction of songs with >=1 non-`<unk>` assigned cue (target >=40%).\n",
+        "- **Coverage:** fraction of songs with zero `<unk>` slots — every assigned cue is real (target >=40%).\n",
         "- **UNK rate:** fraction of all cue slots that are `<unk>` (target <=60%).\n",
         "- **Vocab util:** fraction of non-`<unk>` vocab entries used by >=1 song (target >=50%; scales with corpus size).\n",
-        "- **Intra-cos:** mean within-item pairwise cosine of a song's 6 cue embeddings (target <0.7; lower=more diverse).\n",
+        f"- **Intra-cos:** mean within-item pairwise cosine of a song's {args.num_cues} cue "
+        "embeddings (target <0.7; lower=more diverse).\n",
         "- **Entropy:** Shannon entropy (bits) of cue-usage distribution; higher=less collapse onto a few cues.\n",
         "- **L1 ROUGE-1/L:** ROUGE recall of assigned cue text vs real lyrics; lexical grounding sanity check.\n",
         "- **Retrieval R@K / MRR / rank:** rank of the true song when its cues query artist-free song texts, via an independent encoder (non-circular).\n",
         "- **Level 3 ROUGE/BLEU/BERTScore/Cosine:** decode lyrics from cues, score vs real. Cosine is document-level and length-robust; BERTScore is baseline-rescaled.\n",
-        "- **random floor / oracle ceiling:** reconstruction from 6 random vocab cues (floor) and from 6 cues extracted from the real lyrics (ceiling).\n",
+        f"- **no-cues / random floor / oracle ceiling:** reconstruction from zero cues "
+        f"(genre/mood only), from {args.num_cues} random vocab cues, and from {args.num_cues} "
+        f"cues extracted from the real lyrics (ceiling), respectively.\n",
     ]
 
-    stamped = os.path.join(OUT_ROOT, f"comparison_report_{stamp}.md")
-    latest = os.path.join(OUT_ROOT, "comparison_report.md")
-    for path in (stamped, latest):
-        with open(path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-    print(f"\n[compare] report -> {stamped} (and latest)")
+    path = os.path.join(RUN_DIR, "comparison_report.md")
+    cue_io.atomic_write_text(path, "".join(lines))
+    print(f"\n[compare] report -> {path}")
 
 
 if __name__ == "__main__":

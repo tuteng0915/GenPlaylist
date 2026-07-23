@@ -113,7 +113,7 @@ def assign_all(
         while len(cue_ids) < n_cues:
             cue_ids.append(UNK_CUE_ID)
         entry = CueMappingEntry(item_id=it.item_id, cue_ids=cue_ids[:n_cues])
-        entry.validate()
+        entry.validate(n_cues=n_cues)
         result[it.item_id] = entry
 
         if verbose and (r + 1) % 1000 == 0:

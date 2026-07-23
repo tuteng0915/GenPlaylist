@@ -124,9 +124,8 @@ def chat(prompt: str, system: str = "", temperature: float = 0.3,
     )
     text = resp.choices[0].message.content or ""
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"prompt": prompt, "system": system, "response": text}, f,
-                  ensure_ascii=False)
+    import cue_io
+    cue_io.atomic_write_json(path, {"prompt": prompt, "system": system, "response": text})
     return text
 
 
@@ -149,11 +148,9 @@ def cache_chat_response(prompt: str, response: str, system: str = "",
 
     Lets the Batch API populate the cache so a later chat() call is free.
     """
-    os.makedirs(_LLM_CACHE, exist_ok=True)
     path = _chat_cache_path(prompt, system, temperature, max_tokens, model)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"prompt": prompt, "system": system, "response": response}, f,
-                  ensure_ascii=False)
+    import cue_io
+    cue_io.atomic_write_json(path, {"prompt": prompt, "system": system, "response": response})
 
 
 # ---------------------------------------------------------------------------
@@ -190,11 +187,12 @@ def embed(texts: list[str], model: str = EMBED_MODEL) -> np.ndarray:
             resp = client.embeddings.create(
                 model=model, input=[texts[i] for i in chunk]
             )
+            import cue_io
             for j, i in enumerate(chunk):
                 v = np.asarray(resp.data[j].embedding, dtype=np.float32)
                 v /= (np.linalg.norm(v) or 1.0)
                 out[i] = v
-                np.save(os.path.join(_EMBED_CACHE, f"{_hash(model, texts[i])}.npy"), v)
+                cue_io.atomic_save_npy(os.path.join(_EMBED_CACHE, f"{_hash(model, texts[i])}.npy"), v)
 
     return np.vstack(out) if out else np.zeros((0, 1), dtype=np.float32)
 
