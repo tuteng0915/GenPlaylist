@@ -347,7 +347,7 @@ def _make_embedder(
         def embed(strs: list[str]) -> np.ndarray:
             if not strs:
                 return np.zeros((0, 1), dtype=np.float32)
-            v = model.encode(strs, normalize_embeddings=True, show_progress_bar=False)
+            v = model.encode(strs, normalize_embeddings=True, show_progress_bar=True)
             return np.asarray(v, dtype=np.float32)
 
         return embed, f"sentence-transformers/{model_name}"

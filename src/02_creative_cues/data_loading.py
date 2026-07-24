@@ -19,13 +19,20 @@ from pathlib import Path
 from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CATALOG_PATH = REPO_ROOT / "data" / "dataset" / "catalog_metadata.json"
-LYRICS_DIR = REPO_ROOT / "data" / "lyrics" / "spotify"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))               # 02_creative_cues/ (siblings)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "00_data_schema"))
 from schema import CatalogItem  # noqa: E402
 import cue_lyrics  # noqa: E402
+import cue_clients  # noqa: E402  (side effect: loads repo-root .env before the env lookups below)
+
+# Overridable so a different machine (e.g. a remote server with data mounted
+# elsewhere) can point elsewhere without touching code — set in the repo-root
+# .env or the environment. Unset = same paths as before.
+CATALOG_PATH = Path(os.environ.get(
+    "CUE_CATALOG_PATH", str(REPO_ROOT / "data" / "dataset" / "catalog_metadata.json")))
+LYRICS_DIR = Path(os.environ.get(
+    "CUE_LYRICS_DIR", str(REPO_ROOT / "data" / "lyrics" / "spotify")))
 
 _CATALOG_CACHE: Optional[list[tuple[str, dict]]] = None
 
