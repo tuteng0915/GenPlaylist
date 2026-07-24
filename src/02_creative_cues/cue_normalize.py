@@ -301,25 +301,48 @@ def _make_pos_filter() -> Callable[[list[str]], list[str]]:
 # Step 3: embedder (semantic vectors for dedup + downstream reuse)
 # ---------------------------------------------------------------------------
 
+EMBEDDER_MODELS: dict[str, str] = {
+    "minilm": "all-MiniLM-L6-v2",
+    "qwen3-0.6b": "Qwen/Qwen3-Embedding-0.6B",
+    "qwen3-4b": "Qwen/Qwen3-Embedding-4B",
+    "bge-small": "BAAI/bge-small-en-v1.5",
+    "bge-base": "BAAI/bge-base-en-v1.5",
+}
+DEFAULT_EMBEDDER = "minilm"
+
+
 def _make_embedder(
     token_ids_of: Optional[dict[str, tuple[int, ...]]] = None,
+    embedder: str = DEFAULT_EMBEDDER,
 ) -> tuple[Callable[[list[str]], np.ndarray], str]:
     """Return (embed_fn, backend_name). Vectors are L2-normalized.
 
-    Uses a sentence-embedding model (all-MiniLM-L6-v2) — the paper's "multilingual
-    sentence encoder" role — so cosine reflects semantic similarity, which is what
-    assignment relevance and semantic dedup rely on. Falls back to a sklearn
-    char-ngram vectorizer only if sentence-transformers can't load.
+    Uses a sentence-embedding model — the paper's "multilingual sentence encoder"
+    role — so cosine reflects semantic similarity, which is what assignment
+    relevance and semantic dedup rely on. Falls back to a sklearn char-ngram
+    vectorizer only if sentence-transformers can't load.
+
+    embedder: a key into EMBEDDER_MODELS (e.g. "minilm", "qwen3-0.6b"), or any raw
+    sentence-transformers/HF model id not in that registry. This is the SINGLE
+    swap point for both semantic dedup (cue_normalize step 4) and assignment
+    relevance (cue_assign) — callers on both sides must be passed the SAME
+    embedder, or cues and songs end up embedded in two incompatible vector
+    spaces with no error, just meaningless cosine similarities. Always thread
+    an explicit embedder choice through both cue_normalize.build_vocab_normalized
+    and cue_assign.assign_all together (see pipeline.py) rather than relying on
+    each picking its own default.
 
     Note: T5 is used ONLY for token-identity canonicalization in normalize_raw_cues
     (step 0); its raw encoder is NOT a semantic-similarity model, so it is not used
     for embeddings here. `token_ids_of` is accepted for signature compatibility but
     unused by the sentence encoder (it re-encodes from strings).
     """
-    # --- sentence-transformers MiniLM (preferred; trained for semantic similarity) ---
+    model_name = EMBEDDER_MODELS.get(embedder, embedder)  # unknown key = raw model id
+
+    # --- sentence-transformers (preferred; trained for semantic similarity) ---
     try:
         from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+        model = SentenceTransformer(model_name)
 
         def embed(strs: list[str]) -> np.ndarray:
             if not strs:
@@ -327,7 +350,7 @@ def _make_embedder(
             v = model.encode(strs, normalize_embeddings=True, show_progress_bar=False)
             return np.asarray(v, dtype=np.float32)
 
-        return embed, "sentence-transformers/all-MiniLM-L6-v2"
+        return embed, f"sentence-transformers/{model_name}"
     except Exception:
         pass
 
@@ -459,12 +482,17 @@ def clean_candidates(
     max_df_frac: float = 0.3,
     dedup_threshold: float = 0.92,
     block_tokens: Optional[set[str]] = None,
+    embedder: str = DEFAULT_EMBEDDER,
     verbose: bool = True,
 ) -> dict:
     """Stages 0-4 only: normalize -> df-band -> POS -> blocklist -> embed -> dedup.
 
     Returns {candidates, emb, df, n_docs, backend, stats}. Ranking (stage 5) is
     separate so several ranking arms can share one identical cleaned pool.
+
+    embedder: passed straight to _make_embedder — see its docstring. Must match
+    the embedder passed to cue_assign.assign_all for this same run, or cues and
+    songs end up in incompatible vector spaces.
     """
     raw_cues, token_ids_of = normalize_raw_cues(raw_cues)
     df, n_docs = compute_df(raw_cues)
@@ -485,7 +513,7 @@ def clean_candidates(
     # Kept fixed for ALL ranking arms so the cleaned pool is identical.
     candidates.sort(key=lambda c: idf_score(c, df, n_docs), reverse=True)
 
-    embed_fn, backend = _make_embedder(token_ids_of)
+    embed_fn, backend = _make_embedder(token_ids_of, embedder=embedder)
     emb = embed_fn(candidates) if candidates else np.zeros((0, 1), dtype=np.float32)
 
     if dedup_threshold < 1.0:
@@ -550,6 +578,7 @@ def build_vocab_normalized(
     rank_by: str = "idf",
     rank_seed: int = 0,
     band_target: float = 0.02,
+    embedder: str = DEFAULT_EMBEDDER,
     verbose: bool = True,
 ) -> dict:
     """Full pipeline (stages 0-5). Thin wrapper over clean_candidates + assemble_vocab.
@@ -559,10 +588,13 @@ def build_vocab_normalized(
       embeddings       : np.ndarray (vocab_size-1, d) aligned with vocab[1:]
       embedder_backend : which embedder was used
       stats            : per-stage survivor counts (+ rank_by)
+
+    embedder: see _make_embedder. Pass the SAME value to cue_assign.assign_all
+    for this run (pipeline.py does this for you).
     """
     pool = clean_candidates(raw_cues, min_df=min_df, max_df_frac=max_df_frac,
                             dedup_threshold=dedup_threshold, block_tokens=block_tokens,
-                            verbose=verbose)
+                            embedder=embedder, verbose=verbose)
     return assemble_vocab(pool, vocab_size=vocab_size, rank_by=rank_by,
                           seed=rank_seed, band_target=band_target, verbose=verbose)
 

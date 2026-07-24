@@ -40,6 +40,7 @@ def finish_from_raw(
     rank_by: str = "idf",
     num_cues: int = CUE_TOKENS,
     vocab_size: int = 2048,
+    embedder: str = cue_normalize.DEFAULT_EMBEDDER,
     block_tokens: Optional[set[str]] = None,
     verbose: bool = True,
 ):
@@ -51,14 +52,19 @@ def finish_from_raw(
               still validates and exports fine, but the output item2cues.json
               only round-trips through CueMappingEntry.load_mapping() if that
               loader is told the same n_cues.
+    embedder: sentence-transformers model (or a cue_normalize.EMBEDDER_MODELS key)
+              used for BOTH semantic dedup and assignment relevance. Passed to
+              both build_vocab_normalized and assign_all here so cues and songs
+              always share one vector space — never let the two calls default
+              independently.
     """
     norm = cue_normalize.build_vocab_normalized(
         raw, vocab_size=vocab_size, min_df=min_df, max_df_frac=max_df_frac,
-        dedup_threshold=dedup_threshold, rank_by=rank_by,
+        dedup_threshold=dedup_threshold, rank_by=rank_by, embedder=embedder,
         block_tokens=block_tokens, verbose=verbose)
     vocab, cue_emb = norm["vocab"], norm["embeddings"]
     item2cues = cue_assign.assign_all(items, lyrics_proc, vocab, cue_emb,
-                                      n_cues=num_cues, verbose=verbose)
+                                      n_cues=num_cues, embedder=embedder, verbose=verbose)
     cue_export.export_outputs(vocab, item2cues, out_dir)
     return vocab, item2cues, norm["stats"], cue_emb
 
@@ -79,6 +85,7 @@ def build_vocab_and_assign(
     rank_by: str = "idf",
     num_cues: int = CUE_TOKENS,
     vocab_size: int = 2048,
+    embedder: str = cue_normalize.DEFAULT_EMBEDDER,
     block_tokens: Optional[set[str]] = None,
     verbose: bool = True,
 ):
@@ -88,6 +95,8 @@ def build_vocab_and_assign(
     Defaults to `items`. Pass a train-only split for held-out evaluation so the
     vocabulary never sees held-out test songs; cues are still assigned to every
     item in `items` (item2cues.json stays the full deliverable either way).
+
+    embedder: see finish_from_raw — the single dedup+assignment embedder choice.
     """
     if verbose:
         print(f"\n########## METHOD: {method} ##########")
@@ -97,5 +106,5 @@ def build_vocab_and_assign(
     return finish_from_raw(
         method, raw, items, lyrics_proc, out_dir,
         min_df=min_df, max_df_frac=max_df_frac, dedup_threshold=dedup_threshold,
-        rank_by=rank_by, num_cues=num_cues, vocab_size=vocab_size,
+        rank_by=rank_by, num_cues=num_cues, vocab_size=vocab_size, embedder=embedder,
         block_tokens=block_tokens, verbose=verbose)

@@ -1,6 +1,7 @@
 # WP-B — Creative Cue Mining
 
-Builds a 2,048-entry creative-cue vocabulary and assigns cues per song:
+Builds a creative-cue vocabulary (2,048 entries by default — adjustable via
+`--vocab-size`) and assigns cues per song:
 
 ```
 song metadata + lyrics  →  cue_vocab.json + item2cues.json
@@ -52,6 +53,7 @@ preset, don't reach for a flag.
 | `--config NAME` | `default` | Named preset from `config.py` (see below) |
 | `--limit N` | preset's value (`None` = full catalog) | Override song count — use this for a quick smoke test |
 | `--force` | off | Bypass extraction/cleaning caches, re-run from scratch |
+| `--vocab-size N` | preset's value (`2048`) | Override total vocab entries incl. `<unk>` — a non-default value needs a matching `vocab_size` passed to `CueMappingEntry.validate()`/`load_mapping()` to read the result back correctly |
 | `--skip-health-check` | off | Skip the free coverage/diversity sanity stats (they cost no API calls; on by default) |
 
 ### Presets (`config.py`)
@@ -101,6 +103,9 @@ outputs/production/latest/
 
 # Re-run from scratch, ignoring caches
 .venv/Scripts/python.exe src/02_creative_cues/run_production.py --force
+
+# Build a larger 4096-entry vocab instead of the schema-default 2048
+.venv/Scripts/python.exe src/02_creative_cues/run_production.py --vocab-size 4096
 ```
 
 ---
@@ -145,6 +150,7 @@ semantic retrieval, and (optionally) Level 3 LLM reconstruction.
 | `--test-frac F` | `0.15` | Fraction held out for `--held-out-eval` |
 | `--split-seed N` | `42` | Seed for the `--held-out-eval` split |
 | `--num-cues N` | `6` (`CUE_TOKENS`) | Cues assigned per song — a non-default value needs a matching `n_cues` to read `item2cues.json` back |
+| `--vocab-size N` | `2048` (`CUE_VOCAB_SIZE`) | Total vocab entries incl. `<unk>` — a non-default value needs a matching `vocab_size` to validate/read `cue_vocab.json`/`item2cues.json` back |
 
 ### Examples
 
@@ -161,6 +167,9 @@ semantic retrieval, and (optionally) Level 3 LLM reconstruction.
 
 # Compare a ranking rule against the default
 .venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf --rank-by cluster --level3
+
+# Try a larger vocabulary
+.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf --vocab-size 4096
 ```
 
 ### Output
@@ -201,7 +210,7 @@ modify them. All write timestamped reports to `outputs/experiments/`.
 ```
 `--method` (`tfidf`) · `--limit` (`1000`) · `--lyrics-mode` (`dedup`) · `--lyrics-cap` (`2000`) ·
 `--top-n` (`60`) · `--min-df` comma-separated grid (`2,3,5,10`) · `--dedup-threshold` comma-separated
-grid (`0.90,0.92,0.95,1.0`; `1.0` skips dedup) · `--force`
+grid (`0.90,0.92,0.95,1.0`; `1.0` skips dedup) · `--vocab-size` (`2048`) · `--force`
 
 ### `sweep_corpus_size.py`
 
@@ -211,9 +220,9 @@ grid (`0.90,0.92,0.95,1.0`; `1.0` skips dedup) · `--force`
     --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 ```
 `--methods` (`tfidf,yake`) · `--limits` comma-separated song counts (`100,300,500,1000`) ·
-`--min-df` (`5`) · `--dedup-threshold` (`0.92`) · `--lyrics-mode` (`dedup`) · `--lyrics-cap` (`2000`) ·
-`--top-n` (`60`) · `--force`. Uncached limits trigger extraction — keybert/llm cost per song, so
-only sweep those over limits you already have cached, or expect the cost.
+`--min-df` (`5`) · `--dedup-threshold` (`0.92`) · `--vocab-size` (`2048`) · `--lyrics-mode` (`dedup`) ·
+`--lyrics-cap` (`2000`) · `--top-n` (`60`) · `--force`. Uncached limits trigger extraction —
+keybert/llm cost per song, so only sweep those over limits you already have cached, or expect the cost.
 
 ### `sweep_num_cues.py`
 
@@ -226,7 +235,8 @@ Requires `OPENAI_API_KEY` (the reconstruction decoder).
 ```
 `--method` (`tfidf`) · `--limit` (`300`) · `--eval-sample` (`60`) ·
 `--num-cues` comma-separated grid (`0,3,6,9,12`; `0` = metadata-only floor) · `--min-df` (`5`) ·
-`--dedup-threshold` (`0.92`) · `--lyrics-mode` (`dedup`) · `--lyrics-cap` (`2000`) · `--top-n` (`60`) ·
+`--dedup-threshold` (`0.92`) · `--vocab-size` (`2048`) · `--lyrics-mode` (`dedup`) ·
+`--lyrics-cap` (`2000`) · `--top-n` (`60`) ·
 `--candidate-k` (`40`, MMR candidate-pool floor) · `--score-chars` (`2000`) · `--force`
 
 ### `sweep_ranking.py`
@@ -258,8 +268,8 @@ Health/stability are free; retrieval needs `OPENAI_API_KEY` (skip with `--skip-r
     --limits 500,1000,2000,3000,5000 --min-df 2 --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 ```
 `--methods` (`tfidf,yake`) · `--limits` comma-separated corpus sizes (`500,1000,2000,3000,5000`) ·
-`--min-df` (`2`) · `--dedup-threshold` (`0.92`) · `--lyrics-mode` (`dedup`) · `--lyrics-cap` (`2000`) ·
-`--top-n` (`60`) · `--force`
+`--min-df` (`2`) · `--dedup-threshold` (`0.92`) · `--vocab-size` (`2048`) · `--lyrics-mode` (`dedup`) ·
+`--lyrics-cap` (`2000`) · `--top-n` (`60`) · `--force`
 
 ---
 

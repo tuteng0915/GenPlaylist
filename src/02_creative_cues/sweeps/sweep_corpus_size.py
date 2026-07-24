@@ -44,7 +44,7 @@ def run_one(method, limit, args, tag):
     raw = cue_extractors.extract_raw_cues(items, lyrics_proc, method=method,
                                           force=args.force, top_n=args.top_n, cache_tag=tag)
     norm = cue_normalize.build_vocab_normalized(
-        raw, vocab_size=2048, min_df=args.min_df, dedup_threshold=args.dedup_threshold,
+        raw, vocab_size=args.vocab_size, min_df=args.min_df, dedup_threshold=args.dedup_threshold,
         block_tokens=block, verbose=False)
     return norm["stats"]
 
@@ -55,6 +55,9 @@ def main():
     ap.add_argument("--limits", default="100,300,500,1000", help="comma-separated song counts")
     ap.add_argument("--min-df", type=int, default=5)
     ap.add_argument("--dedup-threshold", type=float, default=0.92)
+    ap.add_argument("--vocab-size", type=int, default=2048,
+                    help="total vocab entries incl. <unk> (default 2048, the CUE_VOCAB_SIZE "
+                         "schema contract)")
     ap.add_argument("--lyrics-mode", default="dedup", choices=list(cue_lyrics.MODES))
     ap.add_argument("--lyrics-cap", type=int, default=cue_lyrics.DEFAULT_CAP)
     ap.add_argument("--top-n", type=int, default=60)
@@ -86,9 +89,11 @@ def _write_report(results, methods, limits, args):
     lines = [
         "# Vocabulary size vs corpus size\n",
         f"_Generated {stamp} · min_df {args.min_df} · dedup {args.dedup_threshold} · "
-        f"lyrics-mode {args.lyrics_mode} (cap {args.lyrics_cap}) · top_n {args.top_n}_\n",
-        "\n`real vocab` = distinct cues surviving all cleaning filters (rest of the 2,048 "
-        "slots are `<pad_*>`). This shows how many usable cues the corpus yields as it grows.\n",
+        f"lyrics-mode {args.lyrics_mode} (cap {args.lyrics_cap}) · top_n {args.top_n} · "
+        f"vocab_size {args.vocab_size}_\n",
+        f"\n`real vocab` = distinct cues surviving all cleaning filters (rest of the "
+        f"{args.vocab_size} slots are `<pad_*>`). This shows how many usable cues the corpus "
+        "yields as it grows.\n",
         "\n## Real vocabulary size (rows = songs N, columns = method)\n",
         "| songs (N) | " + " | ".join(methods) + " | fill% (best) |\n",
         "|-----------|" + "----|" * len(methods) + "----|\n",
@@ -101,7 +106,8 @@ def _write_report(results, methods, limits, args):
             cells.append(str(v))
             if isinstance(v, int):
                 best = max(best, v)
-        fill = int(round(min(best, 2047) / 2047 * 100))
+        n_take = args.vocab_size - 1
+        fill = int(round(min(best, n_take) / n_take * 100))
         lines.append(f"| {limit} | " + " | ".join(cells) + f" | {fill}% |\n")
 
     lines += ["\n## Raw candidate cues before cleaning (rows = N, columns = method)\n",
@@ -124,8 +130,8 @@ def _write_report(results, methods, limits, args):
 
     lines += ["\n## How to read this\n",
               "- Read **down a column** to see how vocab grows with more songs.\n",
-              "- If vocab plateaus well below 2,047 as N grows, the ceiling is cleaning "
-              "(min_df / POS), not corpus size — cross-check with `sweep_cleaning.py`.\n",
+              f"- If vocab plateaus well below {args.vocab_size - 1} as N grows, the ceiling is "
+              "cleaning (min_df / POS), not corpus size — cross-check with `sweep_cleaning.py`.\n",
               "- `min_df` is an absolute count, so its effect strengthens as N grows "
               "(a fixed min_df filters a smaller *fraction* of a larger corpus).\n"]
     cue_io.atomic_write_text(path, "".join(lines))

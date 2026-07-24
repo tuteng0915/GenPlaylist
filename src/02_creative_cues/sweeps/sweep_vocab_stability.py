@@ -48,7 +48,7 @@ def vocab_set(method, limit, args, tag):
     raw = cue_extractors.extract_raw_cues(items, lyrics_proc, method=method,
                                           force=args.force, top_n=args.top_n, cache_tag=tag)
     norm = cue_normalize.build_vocab_normalized(
-        raw, vocab_size=2048, min_df=args.min_df, dedup_threshold=args.dedup_threshold,
+        raw, vocab_size=args.vocab_size, min_df=args.min_df, dedup_threshold=args.dedup_threshold,
         block_tokens=block, verbose=False)
     vocab = norm["vocab"]
     return {c for c in vocab if c != "<unk>" and not c.startswith("<pad_")}
@@ -69,6 +69,9 @@ def main():
     ap.add_argument("--lyrics-mode", default="dedup", choices=list(cue_lyrics.MODES))
     ap.add_argument("--lyrics-cap", type=int, default=cue_lyrics.DEFAULT_CAP)
     ap.add_argument("--top-n", type=int, default=60)
+    ap.add_argument("--vocab-size", type=int, default=2048,
+                    help="total vocab entries incl. <unk> (default 2048, the CUE_VOCAB_SIZE "
+                         "schema contract)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
@@ -95,8 +98,8 @@ def _write_report(sets, methods, limits, args):
     lines = [
         "# Vocabulary set stability (convergence) vs corpus size\n",
         f"_Generated {stamp} · min_df {args.min_df} · dedup {args.dedup_threshold} · "
-        f"lyrics-mode {args.lyrics_mode} · top_n {args.top_n}_\n",
-        "\nVocab size is capped at 2,048, so this measures whether the *chosen cue set* "
+        f"lyrics-mode {args.lyrics_mode} · top_n {args.top_n} · vocab_size {args.vocab_size}_\n",
+        f"\nVocab size is capped at {args.vocab_size}, so this measures whether the *chosen cue set* "
         "stabilizes as songs are added. **Jaccard** = overlap between two vocab sets "
         "(1.0 = identical, 0 = disjoint). Rising toward 1.0 = converging.\n",
     ]

@@ -47,7 +47,7 @@ import cue_export               # noqa: E402
 import cue_io                   # noqa: E402
 import data_loading             # noqa: E402
 import pipeline                 # noqa: E402
-from schema import CUE_TOKENS   # noqa: E402
+from schema import CUE_TOKENS, CUE_VOCAB_SIZE   # noqa: E402
 from datetime import datetime   # noqa: E402
 
 OUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -62,17 +62,20 @@ def load_data(limit):
 
 
 def finish_method_from_raw(method, raw, items, lyrics_proc, min_df, block_tokens,
-                           dedup_threshold=0.92, rank_by="idf", num_cues=CUE_TOKENS):
+                           dedup_threshold=0.92, rank_by="idf", num_cues=CUE_TOKENS,
+                           vocab_size=CUE_VOCAB_SIZE, embedder=cue_normalize.DEFAULT_EMBEDDER):
     """normalize -> assign -> export, via pipeline.py. See pipeline.finish_from_raw."""
     out_dir = os.path.join(RUN_DIR, "methods", method)
     return pipeline.finish_from_raw(method, raw, items, lyrics_proc, out_dir,
                                     min_df=min_df, dedup_threshold=dedup_threshold,
                                     rank_by=rank_by, num_cues=num_cues,
+                                    vocab_size=vocab_size, embedder=embedder,
                                     block_tokens=block_tokens)
 
 
 def run_method(method, items, lyrics_proc, min_df, force, block_tokens, top_n, cache_tag,
-               dedup_threshold=0.92, rank_by="idf", vocab_items=None, num_cues=CUE_TOKENS):
+               dedup_threshold=0.92, rank_by="idf", vocab_items=None, num_cues=CUE_TOKENS,
+               vocab_size=CUE_VOCAB_SIZE, embedder=cue_normalize.DEFAULT_EMBEDDER):
     """extract -> normalize -> assign -> export, via pipeline.py. See pipeline.build_vocab_and_assign.
 
     vocab_items: corpus used for vocabulary building (raw cue extraction + df/idf/dedup).
@@ -85,7 +88,7 @@ def run_method(method, items, lyrics_proc, min_df, force, block_tokens, top_n, c
         method, items, lyrics_proc, out_dir,
         force=force, top_n=top_n, cache_tag=cache_tag, vocab_items=vocab_items,
         min_df=min_df, dedup_threshold=dedup_threshold, rank_by=rank_by,
-        num_cues=num_cues, block_tokens=block_tokens)
+        num_cues=num_cues, vocab_size=vocab_size, embedder=embedder, block_tokens=block_tokens)
 
 
 def evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id, lyrics_ref,
@@ -204,6 +207,18 @@ def main():
                          "contract WP-D expects). A different value still runs, validates, and "
                          "exports item2cues.json fine, but CueMappingEntry.load_mapping() must "
                          "be called with a matching n_cues to read a non-default file back.")
+    ap.add_argument("--vocab-size", type=int, default=CUE_VOCAB_SIZE,
+                    help=f"total vocab entries incl. <unk> (default {CUE_VOCAB_SIZE}, the "
+                         "CUE_VOCAB_SIZE schema contract WP-D expects). A different value still "
+                         "runs, validates, and exports fine, but CueMappingEntry.validate()/"
+                         "load_mapping() must be called with a matching vocab_size to read a "
+                         "non-default file back without falsely rejecting in-range cue IDs.")
+    ap.add_argument("--embedder", default=cue_normalize.DEFAULT_EMBEDDER,
+                    help=f"sentence-transformers model for semantic dedup + assignment relevance "
+                         f"(default '{cue_normalize.DEFAULT_EMBEDDER}'). One of "
+                         f"{sorted(cue_normalize.EMBEDDER_MODELS)}, or any raw HF model id. Does "
+                         "NOT affect evaluation encoders (Level 2 retrieval and Level 3 STS-cosine "
+                         "deliberately use a different, independent encoder either way).")
     args = ap.parse_args()
 
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
@@ -240,6 +255,11 @@ def main():
               f"{CUE_TOKENS} schema contract; item2cues.json from this run needs "
               f"load_mapping(path, n_cues={args.num_cues}) to read back, and WP-D expects "
               f"exactly {CUE_TOKENS}.")
+    if args.vocab_size != CUE_VOCAB_SIZE:
+        print(f"[compare] WARNING: --vocab-size={args.vocab_size} overrides the CUE_VOCAB_SIZE="
+              f"{CUE_VOCAB_SIZE} schema contract; cue_vocab.json/item2cues.json from this run "
+              f"need load_mapping(path, vocab_size={args.vocab_size}) to validate/read back, and "
+              f"WP-D expects exactly {CUE_VOCAB_SIZE}.")
 
     # --held-out-eval: vocabulary is built from train_items only; evaluation (below) is
     # restricted to test_items so every reported metric reflects generalization to songs
@@ -283,7 +303,8 @@ def main():
         vocab, item2cues, nstats, cue_emb = run_method(method, items, lyrics_proc, args.min_df,
                                                        args.force, block_tokens, args.top_n, cache_tag,
                                                        dedup_threshold=eff_dedup, rank_by=args.rank_by,
-                                                       vocab_items=train_items, num_cues=args.num_cues)
+                                                       vocab_items=train_items, num_cues=args.num_cues,
+                                                       vocab_size=args.vocab_size, embedder=args.embedder)
         row = evaluate_method(method, vocab, _eval_view(item2cues), nstats, cue_emb, catalog_by_id,
                               lyrics_raw, lyrics_proc, sample_ids)
         rows[method] = row
@@ -300,7 +321,8 @@ def main():
         print("\n########## METHOD: llm ##########")
         vocab, item2cues, nstats, cue_emb = finish_method_from_raw(
             "llm", raw, items, lyrics_proc, args.min_df, block_tokens,
-            dedup_threshold=eff_dedup, rank_by=args.rank_by, num_cues=args.num_cues)
+            dedup_threshold=eff_dedup, rank_by=args.rank_by, num_cues=args.num_cues,
+            vocab_size=args.vocab_size, embedder=args.embedder)
         row = evaluate_method("llm", vocab, _eval_view(item2cues), nstats, cue_emb, catalog_by_id,
                               lyrics_raw, lyrics_proc, sample_ids)
         rows["llm"] = row
@@ -413,6 +435,7 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
     lines = ["# WP-B Cue Extraction — Method Comparison\n",
              f"_Generated {stamp} · {args.limit} songs · eval sample {len(sample_ids)} · "
              f"min_df {args.min_df} · top_n {args.top_n} · num_cues {args.num_cues} · "
+             f"vocab_size {args.vocab_size} · embedder {args.embedder} · "
              f"lyrics-mode {_mode_str}_\n"]
 
     # ---- num-cues override banner (optional, --num-cues != CUE_TOKENS) ----
@@ -421,6 +444,22 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
             f"\n> **Non-default cue count:** this run assigned {args.num_cues} cues/song "
             f"(schema default is {CUE_TOKENS}). item2cues.json here needs "
             f"`CueMappingEntry.load_mapping(path, n_cues={args.num_cues})` to read back.\n")
+
+    # ---- vocab-size override banner (optional, --vocab-size != CUE_VOCAB_SIZE) ----
+    if args.vocab_size != CUE_VOCAB_SIZE:
+        lines.append(
+            f"\n> **Non-default vocab size:** this run built a {args.vocab_size}-entry vocab "
+            f"(schema default is {CUE_VOCAB_SIZE}). cue_vocab.json/item2cues.json here need "
+            f"`CueMappingEntry.load_mapping(path, vocab_size={args.vocab_size})` to validate "
+            f"correctly on read-back.\n")
+
+    # ---- embedder override banner (optional, --embedder != DEFAULT_EMBEDDER) ----
+    if args.embedder != cue_normalize.DEFAULT_EMBEDDER:
+        lines.append(
+            f"\n> **Non-default embedder:** semantic dedup and assignment relevance both used "
+            f"`{args.embedder}` instead of `{cue_normalize.DEFAULT_EMBEDDER}` in this run. "
+            "Evaluation encoders (Level 2 retrieval, Level 3 STS-cosine) are unaffected — they "
+            "deliberately use an independent encoder regardless of this setting.\n")
 
     # ---- Held-out eval banner (optional, --held-out-eval) ----
     if split_info:

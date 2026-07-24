@@ -91,6 +91,9 @@ def main():
     ap.add_argument("--candidate-k", type=int, default=40,
                     help="base MMR candidate-pool size; effective pool = max(this, 2*N)")
     ap.add_argument("--score-chars", type=int, default=2000)
+    ap.add_argument("--vocab-size", type=int, default=2048,
+                    help="total vocab entries incl. <unk> (default 2048, the CUE_VOCAB_SIZE "
+                         "schema contract)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
@@ -110,7 +113,7 @@ def main():
     raw = cue_extractors.extract_raw_cues(items, lyrics_proc, method=args.method,
                                           force=args.force, top_n=args.top_n, cache_tag=tag)
     norm = cue_normalize.build_vocab_normalized(
-        raw, vocab_size=2048, min_df=args.min_df, dedup_threshold=args.dedup_threshold,
+        raw, vocab_size=args.vocab_size, min_df=args.min_df, dedup_threshold=args.dedup_threshold,
         block_tokens=block, verbose=True)
     vocab, cue_emb = norm["vocab"], norm["embeddings"]
 

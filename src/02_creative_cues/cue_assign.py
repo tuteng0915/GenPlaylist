@@ -52,12 +52,19 @@ def assign_all(
     lam: float = 0.7,
     candidate_k: int = 40,
     embed_fn: Optional[Callable[[list[str]], np.ndarray]] = None,
+    embedder: str = cue_normalize.DEFAULT_EMBEDDER,
     verbose: bool = True,
 ) -> dict[str, CueMappingEntry]:
     """Assign n_cues per song. Returns {item_id: CueMappingEntry} (validated).
 
     vocab[0] == '<unk>'; cue_embeddings[k] aligns with vocab[k+1] (L2-normalized).
     Padding rows (vocab '<pad_*'') have zero embeddings and are skipped.
+
+    embedder: which sentence-transformers model to embed SONGS with when embed_fn
+    isn't given (see cue_normalize._make_embedder). This MUST be the same
+    embedder used to build `cue_embeddings`/`vocab` — cues and songs need to
+    share one vector space, or their cosine similarity is meaningless. Ignored
+    if embed_fn is passed explicitly.
     """
     lyrics_dict = lyrics_dict or {}
 
@@ -76,7 +83,7 @@ def assign_all(
 
     # embed all songs once with the same backend used for the vocab
     if embed_fn is None:
-        embed_fn, backend = cue_normalize._make_embedder()
+        embed_fn, backend = cue_normalize._make_embedder(embedder=embedder)
         if verbose:
             print(f"[assign] song embedder: {backend}")
     texts = [_song_text(it, lyrics_dict.get(it.item_id, "")) for it in catalog]
@@ -113,7 +120,7 @@ def assign_all(
         while len(cue_ids) < n_cues:
             cue_ids.append(UNK_CUE_ID)
         entry = CueMappingEntry(item_id=it.item_id, cue_ids=cue_ids[:n_cues])
-        entry.validate(n_cues=n_cues)
+        entry.validate(n_cues=n_cues, vocab_size=len(vocab))
         result[it.item_id] = entry
 
         if verbose and (r + 1) % 1000 == 0:

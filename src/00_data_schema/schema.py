@@ -263,29 +263,38 @@ class CueMappingEntry:
     item_id: str
     cue_ids: list[int]   # TODO: required 6 items (WP-B deliverable)
 
-    def validate(self, n_cues: int = CUE_TOKENS):
+    def validate(self, n_cues: int = CUE_TOKENS, vocab_size: int = CUE_VOCAB_SIZE):
         """n_cues: expected cue count. Defaults to the CUE_TOKENS=6 WP-D contract;
         pass the actual count for item2cues.json files produced with a non-default
-        --num-cues (run_compare.py) so validation checks against the right length."""
+        --num-cues (run_compare.py) so validation checks against the right length.
+
+        vocab_size: upper bound for cue_ids. Defaults to the CUE_VOCAB_SIZE=2048 WP-D
+        contract; pass the actual value for files produced with a non-default
+        --vocab-size so validation checks against the right bound instead of falsely
+        rejecting in-range indices from a larger vocabulary."""
         assert len(self.cue_ids) == n_cues, \
             f"Expected {n_cues} cues for item '{self.item_id}', got {len(self.cue_ids)}"
-        assert all(0 <= c < CUE_VOCAB_SIZE for c in self.cue_ids), \
-            f"Cue ID out of [0, {CUE_VOCAB_SIZE}) for item '{self.item_id}': {self.cue_ids}"
+        assert all(0 <= c < vocab_size for c in self.cue_ids), \
+            f"Cue ID out of [0, {vocab_size}) for item '{self.item_id}': {self.cue_ids}"
 
     @staticmethod
-    def load_mapping(item2cues_path: str, n_cues: int = CUE_TOKENS) -> dict[str, "CueMappingEntry"]:
+    def load_mapping(item2cues_path: str, n_cues: int = CUE_TOKENS,
+                     vocab_size: int = CUE_VOCAB_SIZE) -> dict[str, "CueMappingEntry"]:
         """Load item2cues.json → {item_id: CueMappingEntry}.  Validates all entries.
 
         n_cues: expected cue count per item (default CUE_TOKENS=6, the WP-D contract).
         Pass the value used to produce the file if it came from a run_compare.py
         --num-cues run that overrode the default.
+        vocab_size: expected vocab size (default CUE_VOCAB_SIZE=2048). Pass the value
+        used to produce the file if it came from a --vocab-size run that overrode
+        the default, so in-range indices from a larger/smaller vocab validate correctly.
         """
         with open(item2cues_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
         out = {}
         for item_id, cue_ids in raw.items():
             e = CueMappingEntry(item_id=str(item_id), cue_ids=cue_ids)
-            e.validate(n_cues=n_cues)
+            e.validate(n_cues=n_cues, vocab_size=vocab_size)
             out[str(item_id)] = e
         return out
 

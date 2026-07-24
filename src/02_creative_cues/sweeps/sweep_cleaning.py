@@ -46,6 +46,9 @@ def main():
     ap.add_argument("--min-df", default="2,3,5,10", help="comma-separated min_df values")
     ap.add_argument("--dedup-threshold", default="0.90,0.92,0.95,1.0",
                     help="comma-separated dedup thresholds (1.0 = skip dedup)")
+    ap.add_argument("--vocab-size", type=int, default=2048,
+                    help="total vocab entries incl. <unk> (default 2048, the CUE_VOCAB_SIZE "
+                         "schema contract)")
     ap.add_argument("--force", action="store_true", help="re-extract raw cues")
     args = ap.parse_args()
 
@@ -66,15 +69,16 @@ def main():
     for md in min_dfs:
         for dt in dedups:
             norm = cue_normalize.build_vocab_normalized(
-                raw, vocab_size=2048, min_df=md, dedup_threshold=dt,
+                raw, vocab_size=args.vocab_size, min_df=md, dedup_threshold=dt,
                 block_tokens=block, verbose=False)
             s = norm["stats"]
             real = s["after_dedup"]
+            n_take = args.vocab_size - 1
             rows.append({
                 "min_df": md, "dedup": dt,
                 "raw": s["raw_candidates"], "df_band": s["after_df_band"],
                 "pos": s["after_pos"], "block": s["after_blocklist"],
-                "real": real, "fill": min(real, 2047) / 2047,
+                "real": real, "fill": min(real, n_take) / n_take,
             })
             print(f"  min_df={md:>3} dedup={dt:<4} -> real vocab {real}")
 
@@ -88,10 +92,11 @@ def _write_report(rows, args):
     lines = [
         f"# Cleaning parameter sweep — `{args.method}`\n",
         f"_Generated {stamp} · {args.limit} songs · lyrics-mode {args.lyrics_mode} "
-        f"(cap {args.lyrics_cap}) · top_n {args.top_n}_\n",
+        f"(cap {args.lyrics_cap}) · top_n {args.top_n} · vocab_size {args.vocab_size}_\n",
         "\nEach row is one **(min_df, dedup-threshold)** config. Extraction is shared/cached; "
         "only the cleaning step re-runs. `real vocab` = distinct cues surviving every filter "
-        "(remaining slots up to 2,048 are `<pad_*>`). `fill%` = real vocab / 2,047.\n",
+        f"(remaining slots up to {args.vocab_size} are `<pad_*>`). "
+        f"`fill%` = real vocab / {args.vocab_size - 1}.\n",
         "\n## Full grid\n",
         "| min_df | dedup thr | raw cand | after df-band | after POS | after blocklist | real vocab | fill% |\n",
         "|--------|-----------|----------|---------------|-----------|-----------------|-----------|-------|\n",
