@@ -2,9 +2,9 @@
 torch==2.2.0+cu121
 
 # CUDA extensions (require torch above to build)
-causal_conv1d==1.1.3.post1
-flash_attn==2.5.6
-mamba_ssm==1.1.4
+# causal_conv1d==1.1.3.post1
+# flash_attn==2.5.6
+# mamba_ssm==1.1.4
 
 # General dependencies
 einops==0.8.1
@@ -14,7 +14,11 @@ huggingface_hub==0.36.2
 hydra-core==1.3.2
 lightning==2.2.1
 matplotlib==3.10.7
-numpy==2.3.4
+numpy==1.26.4                  # torch==2.2.0 needs numpy<2 (its C-API bridge breaks on
+                                #   numpy>=2.0 with "_ARRAY_API not found"); 1.26.4 is also
+                                #   the newest 1.x release, so it's the right floor regardless
+                                #   of target Python version (numpy>=2.3.0 requires Python>=3.11
+                                #   and isn't installable on a 3.10 env at all)
 omegaconf==2.3.0
 Requests==2.32.5
 rich==14.2.0
