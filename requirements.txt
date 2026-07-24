@@ -24,7 +24,9 @@ Requests==2.32.5
 rich==14.2.0
 safetensors==0.6.2
 scikit_learn==1.7.2
-scipy==1.16.3
+scipy==1.15.3                  # 1.16.0+ requires Python>=3.11; 1.15.3 is the newest release
+                                #   that still supports Python 3.10 (needs numpy>=1.23.5,<2.5,
+                                #   satisfied by the numpy pin above)
 timm==1.0.22
 tokenizers==0.22.1
 torchmetrics==1.7.1
