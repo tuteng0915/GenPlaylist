@@ -48,13 +48,7 @@ src/*/outputs/evaluation_logs/
 evaluation_logs/
 
 # Cue-mining caches, per-method scratch outputs, and generated report snapshots
-src/*/outputs/_cache/
-src/*/outputs/keybert/
-src/*/outputs/llm/
-src/*/outputs/tfidf/
-src/*/outputs/yake/
-src/*/outputs/comparison_report*.md
-src/*/outputs/reconstruction_report*.md
+src/02_creative_cues/outputs/*
 
 # ── Upload artifacts ───────────────────────────────────────────────────────────
 upload/
@@ -88,4 +82,4 @@ geoip.db
 analysis_results.png
 ANALYSIS_SUMMARY.md
 test_wandb.py
-src/02_creative_cues/outputs/*
+
