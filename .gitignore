@@ -79,3 +79,5 @@ analysis_results.png
 ANALYSIS_SUMMARY.md
 test_wandb.py
 
+.gradio/
+outputs/
