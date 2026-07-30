@@ -69,6 +69,10 @@ EMBS = {
         'embs': os.path.join(DATA_DIR, 'larp_caption_embs.npy'),
         'ids':  os.path.join(DATA_DIR, 'larp_ids.json'),
     },
+    'LARP_fused': {
+        'embs': os.path.join(DATA_DIR, 'larp_fused_embs.npy'),
+        'ids':  os.path.join(DATA_DIR, 'larp_ids.json'),
+    },
 }
 
 K_VALUES = [5, 10, 20, 50]
