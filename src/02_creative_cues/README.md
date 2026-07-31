@@ -253,6 +253,7 @@ modify them. All write timestamped reports to `outputs/experiments/`.
 | `sweep_num_cues.py` | Does reconstruction quality improve with more cues/song, and where does it plateau? |
 | `sweep_ranking.py` | Which stage-5 ranking rule (`idf`/`df`/`df_idf`/`band`/`random`/`cluster`) gives the most stable, well-utilized, downstream-useful vocabulary? |
 | `sweep_vocab_stability.py` | Does the chosen cue set converge as the corpus grows, or keep churning? |
+| `sweep_embedder_dedup.py` | Does some `--dedup-threshold` recover a non-`minilm` embedder's (e.g. `qwen3-0.6b`) cue diversity, instead of reusing MiniLM's tuned `0.92`? |
 
 ### `sweep_cleaning.py`
 
@@ -323,6 +324,35 @@ python src/02_creative_cues/sweeps/sweep_vocab_stability.py --methods tfidf,yake
 `--methods` (`tfidf,yake`) · `--limits` comma-separated corpus sizes (`500,1000,2000,3000,5000`) ·
 `--min-df` (`2`) · `--dedup-threshold` (`0.92`) · `--vocab-size` (`2048`) · `--lyrics-mode` (`dedup`) ·
 `--lyrics-cap` (`2000`) · `--top-n` (`60`) · `--force`
+
+### `sweep_embedder_dedup.py`
+
+Runs extract → clean → assign → health-check per (embedder, dedup-threshold) grid
+point and reports `intra_cos_mean` (within-item cue diversity; paper collapse
+ceiling `0.7`) side by side across embedders — see
+[PROGRESS_REPORT_2.md §6.5](PROGRESS_REPORT_2.md) for why this needs checking at
+all: swapping `minilm` for `qwen3-0.6b` at the same `0.92` threshold collapsed
+diversity (`0.30` → `0.66`) because Qwen's cosine similarities run more compressed
+for short phrases, so a threshold tuned against MiniLM's distribution doesn't
+transfer as-is.
+
+```bash
+python src/02_creative_cues/sweeps/sweep_embedder_dedup.py \
+    --embedders minilm,qwen3-0.6b --dedup-threshold 0.90,0.92,0.94,0.96,0.98 \
+    --limit 800 --num-cues 18
+```
+`--embedders` comma-separated `cue_normalize.EMBEDDER_MODELS` keys (`minilm,qwen3-0.6b`) ·
+`--dedup-threshold` comma-separated grid (`0.90,0.92,0.94,0.96,0.98`) ·
+`--method` (`tfidf`) · `--limit` (`800`) · `--min-df` (`5`) · `--max-df-frac` (`0.3`) ·
+`--rank-by` (`idf`) · `--num-cues` (`18`) · `--vocab-size` (`2048`) · `--lyrics-mode` (`dedup`) ·
+`--lyrics-cap` (`2000`) · `--top-n` (`100`) · `--force` ·
+`--keep-artifacts` (off — keeps each grid point's `cue_vocab.json`/`item2cues.json` instead of
+discarding them after scoring)
+
+The embedder model is loaded once per embedder, not once per grid point (loading
+`qwen3-0.6b`/`4b` repeatedly is the expensive part); each grid point still re-embeds
+its own threshold-dependent cue set and the song corpus. Report:
+`outputs/experiments/sweep_embedder_dedup_<timestamp>/report.md`.
 
 ---
 
