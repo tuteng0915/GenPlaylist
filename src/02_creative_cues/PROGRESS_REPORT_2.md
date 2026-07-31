@@ -89,14 +89,15 @@ How many usable cues survive cleaning as more songs are added, for the statistic
 | llm | 56,335 | 6,042 | 5,814 | 5,079 | **4,971** |
 
 **Findings**
-- The vocabulary **fills the 2,048 cap at ~3,000 songs** (both methods); below that it
-  is underfilled and padding-heavy. At the paper's min_df=5, the full catalog easily
-  fills the vocabulary.
-- **tfidf yields ~1.4× more surviving cues than llm** at scale (7,160 vs 4,971). tfidf
-  emits many surface-form n-grams; llm produces a smaller, more canonical concept set —
-  fewer raw candidates that clear the df bar (56k vs 68k raw, and a steeper df-band cut).
-- The pre-cap candidate pool keeps growing roughly linearly with N (Heaps' law) — this
-  is expected and not a problem once the vocabulary is full.
+- The real-vocab count (surviving cues before the 2,048 cap) shows **no clear convergence**
+  across the tested range (100–5,000 songs) — it keeps growing at every corpus size checked,
+  with no sign of plateauing, even once the exported vocabulary itself is already fully
+  capped (100% fill by N=3,000).
+- This matches **Heaps' Law**: vocabulary size grows roughly as a sub-linear power of corpus
+  size — new songs keep introducing new surviving cue candidates, just at a decelerating
+  rate, rather than saturating to a fixed count. The continued growth seen here across
+  100→5,000 songs is the expected behavior for a natural-language vocabulary count, not a
+  sign that extraction or cleaning is misbehaving.
 
 ---
 
@@ -154,6 +155,13 @@ blocklist 6,165 → dedup 5,935.
 - **The POS filter is the largest *cleaning* cut** — it removes ~46% of df-band
   survivors (13,996 → 7,491). It doesn't prevent a full vocabulary at low `min_df`, but
   it is the stage to loosen if a small-corpus vocab is starved.
+- **But this size difference had no visible effect on generation quality.** The two most
+  recent full-catalog (5,000-song) production runs that isolate `min_df` — `a861`
+  (`min_df=5`) vs `5b18` (`min_df=2`) — show reconstruction cosine barely moving despite
+  `min_df=2` producing a **2.7× larger** vocabulary (9,960 vs 3,626 real `llm` cues):
+  0.588→0.606 (`llm`), 0.615→0.610 (`tfidf`) — both changes are within run-to-run noise.
+  See §6.4 for the full comparison. In the end, `min_df` is worth tuning for vocabulary
+  *size/fill*, not for generation quality.
 
 ---
 
@@ -312,6 +320,42 @@ insensitive to those two knobs. This is why the production preset keeps the simp
 (`min_df=5`, `idf`): the improvements those levers showed on paper do not translate into better
 generation, so there is no downstream reason to complicate the pipeline for them.
 
+### 6.5 Key finding: embedder choice and vocabulary size also had **no effect** on generation quality — but the embedder change has a real cost elsewhere
+Two more otherwise-identical production runs isolate the semantic embedder (used for both
+semantic dedup and cue↔song assignment relevance) and the vocabulary-size cap, against the same
+`a861` baseline as §6.4:
+
+| Run | change | vocab(real) llm / tfidf | intra-cos ↓ llm / tfidf | **Reconstruction Cosine** (llm / tfidf) |
+|-----|--------|--------------------------|--------------------------|------------------------------------------|
+| `a861` (baseline) | minilm, vocab_size 2048 | 3,626 / 5,347 | 0.293 / 0.309 | 0.588 / 0.615 |
+| `8ca3` | **Qwen3-Embedding-0.6B** | 4,148 / 7,469 | **0.660 / 0.657** | 0.595 / 0.601 |
+| `b064` | **vocab_size 4096** | 4,490 / 8,135 | 0.307 / 0.331 | 0.597 / 0.621 |
+
+Reconstruction cosine moves by only ±0.006 to ±0.015 either way — smaller than or comparable to
+the run-to-run noise visible even in the oracle ceiling itself (0.662 in `a861` vs 0.655 in *both*
+newer runs, despite the oracle condition being nominally independent of vocab size/embedder). By
+this metric, **neither change reaches the output**, same conclusion as §6.4.
+
+**But Qwen has a real, separate cost that the vocab-size change does not: cue diversity collapses.**
+Intra-item cosine jumps from ~0.30 (well under the 0.7 target) to **~0.66** — right at the edge of
+the collapse threshold the whole pipeline is designed to stay under. Likely cause: Qwen's cosine
+similarities run structurally higher/more compressed for short phrases than MiniLM's at this corpus
+size, so both the semantic-dedup threshold (still `0.92`, tuned against MiniLM) and the MMR
+diversity penalty (computed in the same embedding space) become less discriminating — a song's 18
+assigned cues end up looking more similar to each other under Qwen even though the underlying
+vocabulary is larger. `vocab_size=4096` shows no such downside — diversity is essentially unchanged
+(0.307/0.331 vs 0.293/0.309) — it just produces a larger vocabulary table the assigner still can't
+exploit any further (vocab util is similarly flat).
+
+**Interpretation:** extends §6.4's finding to these two knobs as well — the assigner selects the 18
+most relevant cues from whatever vocabulary/embedding space it's given, so reconstruction quality
+is largely insensitive to both. Increasing `vocab_size` is a "free but low-value" change (bigger
+table, same downstream result). Switching to Qwen is actively **worse** on diversity, for no
+reconstruction gain to offset it — production should keep `embedder=minilm` and `vocab_size=2048`.
+If Qwen is revisited later (e.g. for its multilingual capability, the original motivation), the
+`0.92` dedup threshold needs recalibrating against Qwen's own cosine distribution first, not
+reused from MiniLM's tuning.
+
 ---
 
 ## 7. Overall conclusions & recommendations
@@ -331,9 +375,15 @@ generation, so there is no downstream reason to complicate the pipeline for them
 5. **Extractor:** tfidf yields a larger vocabulary and slightly higher reconstruction cosine
    (its cues echo lyric words); production uses **`llm`** for its more diverse, evocative,
    concept-level cues (best intra-cos and retrieval), which better suit downstream generation.
+6. **Embedder / vocabulary size:** per §6.5, swapping MiniLM for Qwen3-Embedding-0.6B and
+   doubling `vocab_size` to 4096 **both leave reconstruction cosine unchanged** (within the
+   same noise band as §6.4). Qwen additionally **collapses within-song cue diversity**
+   (intra-cos 0.29→0.66, near the 0.7 target ceiling) for no compensating gain — production
+   keeps **`embedder=minilm`, `vocab_size=2048`**.
 
-> **Bottom line:** the production pipeline is built and validated on held-out songs (§6). The
-> two parameters that looked most promising on intrinsic metrics — `min_df` and `rank_by` —
-> turned out to have **no measurable effect on generation quality**, so production ships the
-> simplest defaults (`min_df=5`, `idf`) and invests only in the levers that reached the
-> output: the `llm` extractor and an 18-cue budget.
+> **Bottom line:** the production pipeline is built and validated on held-out songs (§6). Every
+> lever that looked most promising on intrinsic metrics — `min_df`, `rank_by`, embedder choice,
+> and vocabulary size — turned out to have **no measurable effect on generation quality**, and in
+> Qwen's case actively hurt cue diversity. Production ships the simplest defaults (`min_df=5`,
+> `idf`, `minilm`, `vocab_size=2048`) and invests only in the levers that reached the output: the
+> `llm` extractor and an 18-cue budget.

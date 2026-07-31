@@ -28,16 +28,19 @@ Two entry points share stages 0-3 via `pipeline.py`:
 | **`run_production.py`** | 0-3 only, one method | Building the actual deliverable — no evaluation, no LLM judging calls beyond extraction itself |
 | **`run_compare.py`** | 0-4, one or more methods | Deciding *which* extraction method / settings to use, via the full grounding + retrieval + reconstruction evaluation |
 
-Setup (once): `pip install -r requirements.txt` from a venv, and set
+Setup (once): create a venv and `pip install -r requirements.txt` into it, and set
 `OPENAI_API_KEY` in the environment or a repo-root `.env` file if you're using
 the `llm` method, Level 3 reconstruction, or the independent retrieval encoder.
+
+The commands below assume the venv is activated (`.venv\Scripts\activate` on
+Windows) so `python` resolves to the venv's interpreter.
 
 ---
 
 ## Production run
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py
+python src/02_creative_cues/run_production.py
 ```
 
 Runs extract → clean → assign → export for **one method**, with **no
@@ -90,22 +93,22 @@ outputs/production/latest/
 
 ```bash
 # Standard production build (full catalog, the `default` preset)
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py
+python src/02_creative_cues/run_production.py
 
 # Smoke test on a small sample before committing to a full run
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py --limit 200
+python src/02_creative_cues/run_production.py --limit 200
 
 # Build with tfidf instead of llm (no API cost)
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py --config tfidf
+python src/02_creative_cues/run_production.py --config tfidf
 
 # Build the WP-D schema-default 6 cues/song instead of 18
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py --config schema-default-cues
+python src/02_creative_cues/run_production.py --config schema-default-cues
 
 # Re-run from scratch, ignoring caches
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py --force
+python src/02_creative_cues/run_production.py --force
 
 # Build a larger 4096-entry vocab instead of the schema-default 2048
-.venv/Scripts/python.exe src/02_creative_cues/run_production.py --vocab-size 4096
+python src/02_creative_cues/run_production.py --vocab-size 4096
 ```
 
 ---
@@ -119,7 +122,7 @@ them: vocabulary health, cue diversity, Level 1 lexical grounding, Level 2
 semantic retrieval, and (optionally) Level 3 LLM reconstruction.
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
+python src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
 ```
 
 ### CLI
@@ -156,20 +159,20 @@ semantic retrieval, and (optionally) Level 3 LLM reconstruction.
 
 ```bash
 # Full comparison across all four methods, with reconstruction
-.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm \
+python src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm \
     --eval-sample 200 --level3
 
 # LLM extraction via the async Batch API (large runs)
-.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm --llm-batch
+python src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm --llm-batch
 
 # Generalization check: vocab never sees the songs it's scored on
-.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf,yake --held-out-eval --test-frac 0.15
+python src/02_creative_cues/run_compare.py --methods tfidf,yake --held-out-eval --test-frac 0.15
 
 # Compare a ranking rule against the default
-.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf --rank-by cluster --level3
+python src/02_creative_cues/run_compare.py --methods tfidf --rank-by cluster --level3
 
 # Try a larger vocabulary
-.venv/Scripts/python.exe src/02_creative_cues/run_compare.py --methods tfidf --vocab-size 4096
+python src/02_creative_cues/run_compare.py --methods tfidf --vocab-size 4096
 ```
 
 ### Output
@@ -204,7 +207,7 @@ modify them. All write timestamped reports to `outputs/experiments/`.
 ### `sweep_cleaning.py`
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_cleaning.py --method tfidf --limit 1000 \
+python src/02_creative_cues/sweeps/sweep_cleaning.py --method tfidf --limit 1000 \
     --lyrics-mode dedup --lyrics-cap 2000 --top-n 60 \
     --min-df 2,3,5,10 --dedup-threshold 0.90,0.92,0.95,1.0
 ```
@@ -215,7 +218,7 @@ grid (`0.90,0.92,0.95,1.0`; `1.0` skips dedup) · `--vocab-size` (`2048`) · `--
 ### `sweep_corpus_size.py`
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_corpus_size.py --methods tfidf,yake \
+python src/02_creative_cues/sweeps/sweep_corpus_size.py --methods tfidf,yake \
     --limits 100,300,500,1000 --min-df 5 --dedup-threshold 0.92 \
     --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 ```
@@ -229,7 +232,7 @@ keybert/llm cost per song, so only sweep those over limits you already have cach
 Requires `OPENAI_API_KEY` (the reconstruction decoder).
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_num_cues.py --method tfidf --limit 300 \
+python src/02_creative_cues/sweeps/sweep_num_cues.py --method tfidf --limit 300 \
     --eval-sample 60 --num-cues 0,3,6,9,12 \
     --min-df 5 --dedup-threshold 0.92 --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 ```
@@ -244,7 +247,7 @@ Requires `OPENAI_API_KEY` (the reconstruction decoder).
 Health/stability are free; retrieval needs `OPENAI_API_KEY` (skip with `--skip-retrieval`).
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_ranking.py --method tfidf \
+python src/02_creative_cues/sweeps/sweep_ranking.py --method tfidf \
     --limits 500,1000,2000,3000,5000 --retrieval-limit 1000 \
     --vocab-size 2048 --min-df 2 --dedup-threshold 0.92 --num-cues 18 \
     --lyrics-mode dedup --lyrics-cap 2000 --top-n 60 --eval-sample 100
@@ -264,7 +267,7 @@ Health/stability are free; retrieval needs `OPENAI_API_KEY` (skip with `--skip-r
 ### `sweep_vocab_stability.py`
 
 ```bash
-.venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_vocab_stability.py --methods tfidf,yake \
+python src/02_creative_cues/sweeps/sweep_vocab_stability.py --methods tfidf,yake \
     --limits 500,1000,2000,3000,5000 --min-df 2 --lyrics-mode dedup --lyrics-cap 2000 --top-n 60
 ```
 `--methods` (`tfidf,yake`) · `--limits` comma-separated corpus sizes (`500,1000,2000,3000,5000`) ·
