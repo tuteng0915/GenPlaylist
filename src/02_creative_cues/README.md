@@ -89,6 +89,57 @@ outputs/production/latest/
     ... same files, overwritten every run — the current production vocab
 ```
 
+#### Output schema (what other WPs read)
+
+This is the WP-B → WP-D interface. **`item2cues.json`'s exact shape is a schema
+contract** — get it wrong and the backbone tokenizer silently misreads cue IDs.
+
+**`cue_vocab.json`** — JSON list of `vocab_size` strings (`2048` unless
+`--vocab-size` overrides it). `vocab[0]` is always the literal string
+`"<unk>"` — the reserved fallback for missing coverage. A cue's **index in
+this list is its cue ID** everywhere else in the pipeline.
+
+```json
+["<unk>", "heartbreak", "neon nights", "..."]
+```
+
+**`item2cues.json`** — JSON object `{"<item_id>": [cue_id, cue_id, ...]}`.
+
+- `item_id` : string, matching the catalog / `clhe_token.json` keys (`"0"`, `"1"`, ...).
+- value     : list of cue IDs (ints, each `0 <= id < vocab_size`). Length =
+  `num_cues` for *this run* — **18** for the `default`/`tfidf` presets, **6**
+  (the WP-D schema default) for `schema-default-cues`. Don't assume 6.
+
+```json
+{"0": [842, 12, 5, 1090, 3, 77, 0, 15, ...], "1": [3, 77, 900, ...]}
+```
+
+Canonical reader — don't hand-parse this file:
+
+```python
+from schema import CueMappingEntry
+mapping = CueMappingEntry.load_mapping(
+    "outputs/production/latest/item2cues.json",
+    n_cues=18,          # match this run's num_cues (see run_config.json)
+    vocab_size=2048,    # match this run's vocab_size (see run_config.json)
+)
+entry = mapping["0"]     # CueMappingEntry(item_id="0", cue_ids=[...])
+```
+
+(defined in [`00_data_schema/schema.py`](../00_data_schema/schema.py); passing
+the wrong `n_cues`/`vocab_size` raises on `validate()` rather than silently
+truncating.)
+
+**`run_config.json`** — every resolved `ProductionConfig` field (`method`,
+`limit`, `top_n`, `lyrics_mode`, `lyrics_cap`, `min_df`, `max_df_frac`,
+`dedup_threshold`, `rank_by`, `vocab_size`, `num_cues`, `force`) plus
+`preset`, `generated` (timestamp), `n_items`, `n_with_lyrics`. This is the
+source of truth for the `n_cues`/`vocab_size` to pass into
+`CueMappingEntry.load_mapping()` above — don't assume the schema defaults.
+
+**`health_report.md`** — human-readable only, not a stable machine schema.
+Coverage rate, UNK rate, vocab utilization, cue entropy, top-10 cues table.
+
 ### Examples
 
 ```bash
@@ -187,6 +238,14 @@ outputs/runs/<run_id>/
         cue_vocab.json
         item2cues.json
 ```
+
+`methods/<method>/cue_vocab.json` and `item2cues.json` follow the exact same
+schema as the production output — see [Output schema](#output-schema-what-other-wps-read)
+above. `run_config.json` here holds the CLI args instead of a `ProductionConfig`,
+but the fields that matter for reading the files back are the same:
+`--num-cues` (item length in `item2cues.json`) and `--vocab-size` (bound on
+cue IDs / length of `cue_vocab.json`) — pass whatever this run used into
+`CueMappingEntry.load_mapping(path, n_cues=..., vocab_size=...)`.
 
 ---
 

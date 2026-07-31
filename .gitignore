@@ -47,8 +47,11 @@ src/*/outputs/audio/
 src/*/outputs/evaluation_logs/
 evaluation_logs/
 
+
 # Cue-mining caches, per-method scratch outputs, and generated report snapshots
 src/02_creative_cues/outputs/*
+src/*/METHOD_WRITEUP.md
+src/*/PROGRESS_REPORT*.md
 
 # ── Upload artifacts ───────────────────────────────────────────────────────────
 upload/
