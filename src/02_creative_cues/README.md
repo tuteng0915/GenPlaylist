@@ -95,13 +95,20 @@ Exact shape of each file in `outputs/production/<timestamp>/` (and its
 `latest/` mirror):
 
 **`cue_vocab.json`** — JSON list of `vocab_size` strings (`2048` unless
-`--vocab-size` overrides it). `vocab[0]` is always the literal string
-`"<unk>"` — the reserved fallback for missing coverage. A cue's **index in
-this list is its cue ID** everywhere else in the pipeline.
+`--vocab-size` overrides it). A cue's **index in this list is its cue ID**
+everywhere else in the pipeline.
 
 ```json
 ["<unk>", "heartbreak", "neon nights", "..."]
 ```
+
+> **Index 0 is reserved.** `vocab[0]` is always the literal string `"<unk>"`
+> — it is prepended ahead of the ranked cues when the vocab is built, not a
+> cue mined from the catalog. Cue ID `0` in `item2cues.json` means "no cue
+> assigned" (missing coverage fallback), not an actual cue. Any tooling that
+> reads `cue_vocab.json` should treat index 0 as this sentinel, not as
+> vocabulary entry #1 — `cue_export.load_vocab()` asserts `vocab[0] ==
+> "<unk>"` and rejects the file otherwise.
 
 **`item2cues.json`** — JSON object `{"<item_id>": [cue_id, cue_id, ...]}`.
 
