@@ -33,11 +33,15 @@ Implementation roadmap
 
 from __future__ import annotations
 
+from __future__ import annotations
+
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '00_data_schema'))
-from schema import CatalogItem, GeneratedItem, SynthesisResult  # noqa: E402
+sys.path.insert(0, '/home/wjzhang/tt_workspace/model/GenPlaylist/src/00_data_schema')
+sys.path.insert(0, os.path.dirname(__file__))
+
+from schema import CatalogItem, GeneratedItem, SynthesisResult
 
 import numpy as np
 from typing import Optional
@@ -48,26 +52,24 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 def _call_qwen3(prompt: str, system: str = "") -> str:
-    """Call Qwen3 via DashScope API.
+    """Call OpenAI API for verbalization (replaces DashScope/Qwen)."""
+    import os
+    from openai import OpenAI
 
-    TODO (WP-C): replace stub with real DashScope call:
-        import dashscope
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            raise EnvironmentError("DASHSCOPE_API_KEY is not set.")
-        response = dashscope.Generation.call(
-            model="qwen-plus",           # or "qwen3-7b-instruct"
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": prompt},
-            ],
-            api_key=api_key,
-        )
-        return response.output.text.strip()
-    """
-    print("[verbalization] _call_qwen3 is a stub — returning placeholder output.")
-    return "STUB OUTPUT"
+    client = OpenAI(
+        api_key=os.environ["OPENAI_API_KEY"],
+        base_url="https://api.openai.com/v1",
+    )
 
+    response = client.chat.completions.create(
+        model="gpt-5-mini",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        max_completion_tokens=4096,
+    )
+    return response.choices[0].message.content.strip()
 
 # ---------------------------------------------------------------------------
 # kNN catalog lookup
