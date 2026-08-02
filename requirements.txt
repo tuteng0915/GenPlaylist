@@ -1,25 +1,58 @@
-causal_conv1d==1.1.3.post1
+# Install in order: torch first, then CUDA extensions that depend on it
+torch==2.2.0+cu121
+
+# CUDA extensions (require torch above to build)
+# causal_conv1d==1.1.3.post1
+# flash_attn==2.5.6
+# mamba_ssm==1.1.4
+
+# General dependencies
 einops==0.8.1
-faiss==1.9.0
-flash_attn==2.5.6
+faiss-cpu==1.9.0
 fsspec==2024.2.0
-huggingface_hub==0.30.2
+huggingface_hub==0.36.2
 hydra-core==1.3.2
 lightning==2.2.1
-mamba_ssm==1.1.4
 matplotlib==3.10.7
-numpy==2.3.4
+numpy==1.26.4                  # torch==2.2.0 needs numpy<2 (its C-API bridge breaks on
+                                #   numpy>=2.0 with "_ARRAY_API not found"); 1.26.4 is also
+                                #   the newest 1.x release, so it's the right floor regardless
+                                #   of target Python version (numpy>=2.3.0 requires Python>=3.11
+                                #   and isn't installable on a 3.10 env at all)
 omegaconf==2.3.0
 Requests==2.32.5
 rich==14.2.0
 safetensors==0.6.2
 scikit_learn==1.7.2
-scipy==1.16.3
+scipy==1.15.3                  # 1.16.0+ requires Python>=3.11; 1.15.3 is the newest release
+                                #   that still supports Python 3.10 (needs numpy>=1.23.5,<2.5,
+                                #   satisfied by the numpy pin above)
 timm==1.0.22
 tokenizers==0.22.1
-torch==2.2.0+cu121
 torchmetrics==1.7.1
 tqdm==4.67.1
-transformers==4.38.2
+transformers==4.57.6
 wandb==0.23.0
 tensorboard>=2.14.0
+
+# --- WP-B (src/02_creative_cues — creative cue mining) ---
+# transformers/huggingface_hub above were bumped from 4.38.2/0.30.2 to satisfy
+# sentence-transformers (requires transformers>=4.41.0,<6.0) and to load Qwen3
+# embedding models (need a recent-enough transformers to recognize the Qwen3
+# architecture at all). Kept within the 4.x line rather than jumping to 5.x to
+# minimize risk to the custom PreTrainedModel/PretrainedConfig/PreTrainedTokenizer
+# subclasses in 03_backbone_recommender (dataloader.py, models/configuration_mdlm.py,
+# models/modeling_mdlm.py, models/dimamba.py). Verified before pinning: `pip check`
+# clean, Qwen3-Embedding-0.6B and MiniLM both load and encode, and WP-B's full
+# run_compare.py pipeline runs end to end under transformers==4.57.6. A machine that
+# only needs WP-B (no GPU) can instead use src/02_creative_cues/requirements.txt,
+# a CPU-only local-dev shortcut — but production/runpod should install THIS file.
+sentence-transformers==5.6.0   # MiniLM/mpnet/Qwen embeddings: assignment, semantic dedup, STS cosine
+yake==0.7.3                    # YAKE keyphrase extractor
+spacy==3.8.14                  # POS filter (preferred backend); then: python -m spacy download en_core_web_sm
+nltk==3.9.4                    # POS filter fallback backend
+keybert==0.9.0                 # KeyBERT extractor
+openai==2.44.0                 # llm extractor / oracle / reconstruction decoder / retrieval embeddings (needs OPENAI_API_KEY)
+rouge-score==0.1.2             # ROUGE — Level 1 grounding + Level 3 reconstruction
+sacrebleu==2.6.0                # BLEU — Level 3
+bert-score==0.3.13              # BERTScore — Level 3 (downloads roberta-large on first use)

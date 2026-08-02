@@ -1,0 +1,46 @@
+# WP-B (Creative Cue Mining) — LOCAL CPU-ONLY DEV SHORTCUT
+#
+# This is NOT the production/runpod source of truth. The project-root
+# requirements.txt now includes WP-B's dependencies too (see its "WP-B" section),
+# pinned against the GPU/CUDA torch build actually used on runpod — that's the
+# file to install there, and it's sufficient to run everything in this folder.
+#
+# Use THIS file only when iterating on WP-B locally on a machine without a GPU:
+# root's torch==...+cu121 pin and its causal_conv1d/flash_attn/mamba_ssm CUDA
+# extensions need a matching GPU + CUDA toolchain and won't install here. WP-B
+# itself only needs CPU.
+#
+# After pip install, also fetch the models the code uses:
+#   python -m spacy download en_core_web_sm     # POS filter (preferred backend)
+#   MiniLM / mpnet / Qwen / roberta-large download automatically on first use (HuggingFace cache)
+#
+# Optional groups are marked: the pipeline runs without them, with reduced functionality.
+
+# --- Core (always required) ---
+numpy>=1.24
+scikit-learn>=1.3            # TF-IDF extractor + char-ngram fallback embedder
+sentence-transformers>=2.2   # MiniLM/mpnet/Qwen embeddings: assignment, semantic dedup, STS cosine
+transformers>=4.41           # sentence-transformers requires >=4.41.0; also backs the T5
+                             #   tokenizer (step-0 cue canonicalization). Qwen3 embedding
+                             #   models need a recent-enough transformers to load at all —
+                             #   verified working at transformers==4.57.6 (root's pin).
+torch>=2.2                   # backs sentence-transformers / keybert / bert-score
+                             #   NOTE: install a CPU or matching-CUDA build.
+                             #   Do NOT use the '+cu121' pin here (not on PyPI). If needed:
+                             #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+yake>=0.4.8                  # YAKE extractor
+
+# --- POS filter (need ONE backend; spaCy preferred, else NLTK, else built-in heuristic) ---
+spacy>=3.7                   # then: python -m spacy download en_core_web_sm
+nltk>=3.8                    # alternative POS backend (+ averaged_perceptron_tagger data)
+
+# --- Extraction method: KeyBERT (only if using --methods ...,keybert) ---
+keybert>=0.8
+
+# --- LLM features (llm extractor, oracle, reconstruction decoder, OpenAI retrieval embeddings) ---
+openai>=1.0                  # requires OPENAI_API_KEY (e.g. in a project-root .env)
+
+# --- Evaluation metrics ---
+rouge-score>=0.1.2           # ROUGE — Level 1 grounding + Level 3 reconstruction
+sacrebleu>=2.3               # BLEU — Level 3
+bert-score>=0.3.13           # BERTScore — Level 3 (downloads roberta-large on first use)
