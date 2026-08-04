@@ -57,20 +57,22 @@ preset, don't reach for a flag.
 | `--limit N` | preset's value (`None` = full catalog) | Override song count — use this for a quick smoke test |
 | `--force` | off | Bypass extraction/cleaning caches, re-run from scratch |
 | `--vocab-size N` | preset's value (`2048`) | Override total vocab entries incl. `<unk>` — a non-default value needs a matching `vocab_size` passed to `CueMappingEntry.validate()`/`load_mapping()` to read the result back correctly |
+| `--fixed-vocab PATH` | off | Freeze an existing `cue_vocab.json` and regenerate only the ranked per-song table |
 | `--skip-health-check` | off | Skip the free coverage/diversity sanity stats (they cost no API calls; on by default) |
 
 ### Presets (`config.py`)
 
 | Preset | method | rank_by | num_cues | min_df | top_n | lyrics_mode |
 |---|---|---|---|---|---|---|
-| `default` | `llm` | `idf` | **8** | 5 | 100 | `dedup` |
-| `tfidf` | `tfidf` | `idf` | **8** | 5 | 100 | `dedup` |
+| `default` | `llm` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
+| `tfidf` | `tfidf` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
 | `research-18-cues` | `llm` | `idf` | 18 | 5 | 100 | `dedup` |
 
 `default` is the WP-D-compatible production contract: a 2,048-entry cue
-vocabulary and **8 cues/song**. `tfidf` keeps the same interface as an API-free
-baseline. `research-18-cues` is an ablation only; its manifest is marked
-`wp_d_compatible=false` and it cannot be consumed by the production tokenizer.
+vocabulary and a relevance-ranked **16-candidate table per song**. WP-D consumes
+the first 8 candidates, so 4/8/12/16-cue ablations share one frozen table.
+`tfidf` keeps the same interface as an API-free baseline. `research-18-cues` is
+an ablation only and does not match the frozen 16-candidate artifact contract.
 
 Add a new preset in `config.py` (as a `replace(DEFAULT, ...)` entry in
 `PRESETS`) when a setting changes, rather than adding a new CLI flag.
@@ -80,7 +82,10 @@ Add a new preset in `config.py` (as a `replace(DEFAULT, ...)` entry in
 ```
 outputs/production/<timestamp>/
     cue_vocab.json      # 2,048 cue strings; index = cue ID
-    item2cues.json      # {"item_id": [cue_id, ...]}
+    item2cues.json      # {"item_id": [16 relevance-ranked cue IDs]}
+    item2cue_scores.json # relevance scores aligned with item2cues.json
+    item_cues.tsv       # human-readable long-form table
+    cue_manifest.json   # schema, assignment settings, and artifact hashes
     run_config.json     # exact resolved settings for this run
     health_report.md    # coverage / UNK rate / vocab utilization / entropy (unless --skip-health-check)
 outputs/production/latest/
@@ -111,10 +116,9 @@ everywhere else in the pipeline.
 **`item2cues.json`** — JSON object `{"<item_id>": [cue_id, cue_id, ...]}`.
 
 - `item_id` : string song ID (`"0"`, `"1"`, ...), matching the catalog's item IDs.
-- value     : list of cue IDs (ints, each `0 <= id < vocab_size`, indexing into
-  `cue_vocab.json`). Length = `num_cues` for *this run* — **8** for the
-  `default`/`tfidf` presets and **18** for `research-18-cues`. Consumers should
-  check `cue_manifest.json` before loading an artifact.
+- value     : relevance-ranked cue IDs (ints, each `0 <= id < vocab_size`,
+  indexing into `cue_vocab.json`). Length is **16** for production; WP-D uses
+  `cue_ids[:8]`. `<unk>` padding, if needed, appears only at the end.
 
 ```json
 {"0": [842, 12, 5, 1090, 3, 77, 0, 15, ...], "1": [3, 77, 900, ...]}
@@ -122,7 +126,8 @@ everywhere else in the pipeline.
 
 **`run_config.json`** — every resolved `ProductionConfig` field (`method`,
 `limit`, `top_n`, `lyrics_mode`, `lyrics_cap`, `min_df`, `max_df_frac`,
-`dedup_threshold`, `rank_by`, `vocab_size`, `num_cues`, `force`) plus
+`dedup_threshold`, `rank_by`, `vocab_size`, `num_cues`, `active_cues`,
+`assignment_strategy`, `candidate_k`, `embedder`, `force`) plus
 `preset`, `generated` (timestamp), `n_items`, `n_with_lyrics`. This is the
 source of truth for the `num_cues`/`vocab_size` a given `item2cues.json`/
 `cue_vocab.json` was built with.

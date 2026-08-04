@@ -15,18 +15,21 @@ Interface contract
 Schema constants (do NOT change without coordinating with 00_data_schema)
 -------------------------------------------------------------------------
   CUE_VOCAB_SIZE = 2048    (index 0 = '<unk>')
-  CUE_TOKENS     = 8       (c0 … c7, per song; experiments may override via num_cues)
+  CUE_CANDIDATES_PER_ITEM = 16  (ranked master table width)
+  CUE_TOKENS              = 8   (default prefix consumed by WP-D)
 """
 
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '00_data_schema'))
 from schema import (  # noqa: E402
+    CUE_CANDIDATES_PER_ITEM,
     CUE_TOKENS,
     CUE_VOCAB_SIZE,
     SCHEMA_VERSION,
@@ -66,10 +69,14 @@ def export_outputs(
     vocab: list[str],
     item2cues: dict,
     output_dir: str,
+    *,
+    score_mapping: dict[str, list[float | None]] | None = None,
+    assignment_metadata: dict | None = None,
 ) -> None:
     """Write cue_vocab.json and item2cues.json to output_dir.
 
-    item2cues.json format: {"item_id": [c0, c1, c2, c3, c4, c5, c6, c7], ...}
+    item2cues.json format: {"item_id": [c0, c1, ..., c15], ...}. The
+    GenPlaylist-v1 model consumes the first eight entries.
     This is the format that CueMappingEntry.load_mapping() reads.
 
     Parameters
@@ -103,13 +110,52 @@ def export_outputs(
     cue_io.atomic_write_json(cues_path, mapping)
     print(f"[cue_export] Wrote item2cues ({len(mapping)} items) -> {cues_path}")
 
+    score_path = None
+    if score_mapping is not None:
+        if set(score_mapping) != set(mapping):
+            raise ValueError("item2cue score IDs must exactly match item2cues IDs")
+        for item_id, scores in score_mapping.items():
+            if len(scores) != num_cues:
+                raise ValueError(
+                    f"Expected {num_cues} cue scores for {item_id}, got {len(scores)}")
+        score_path = os.path.join(output_dir, "item2cue_scores.json")
+        cue_io.atomic_write_json(score_path, score_mapping)
+
+        table_lines = ["item_id\trank\tcue_id\tcue\trelevance_score\tis_unk\n"]
+        for item_id, cue_ids in mapping.items():
+            for rank, (cue_id, score) in enumerate(
+                zip(cue_ids, score_mapping[item_id]), 1
+            ):
+                cue_text = vocab[cue_id].replace("\t", " ").replace("\n", " ")
+                score_text = "" if score is None else f"{score:.8f}"
+                table_lines.append(
+                    f"{item_id}\t{rank}\t{cue_id}\t{cue_text}\t{score_text}\t"
+                    f"{str(cue_id == UNK_CUE_ID).lower()}\n")
+        cue_io.atomic_write_text(
+            os.path.join(output_dir, "item_cues.tsv"), "".join(table_lines))
+
+    def sha256(path: str) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "wp_d_compatible": (
-            num_cues == CUE_TOKENS and len(vocab) == CUE_VOCAB_SIZE),
+            num_cues in {CUE_TOKENS, CUE_CANDIDATES_PER_ITEM}
+            and len(vocab) == CUE_VOCAB_SIZE),
         "n_items": len(mapping),
         "cue_vocab_size": len(vocab),
+        # Keep cues_per_item for older readers while making the new stored vs.
+        # active distinction explicit.
         "cues_per_item": num_cues,
+        "stored_cues_per_item": num_cues,
+        "default_active_cues": CUE_TOKENS,
+        "artifact_contract_cues": CUE_CANDIDATES_PER_ITEM,
+        "cue_vocab_sha256": sha256(vocab_path),
+        "item2cues_sha256": sha256(cues_path),
         "token_layout": {
             "tokens_per_item": TOKEN_LAYOUT.tokens_per_item,
             "bos": 0,
@@ -119,6 +165,10 @@ def export_outputs(
             "mask": TOKEN_LAYOUT.mask_token,
         },
     }
+    if score_path is not None:
+        manifest["item2cue_scores_sha256"] = sha256(score_path)
+    if assignment_metadata is not None:
+        manifest["assignment"] = assignment_metadata
     cue_io.atomic_write_json(os.path.join(output_dir, "cue_manifest.json"), manifest)
 
 

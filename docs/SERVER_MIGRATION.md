@@ -28,7 +28,53 @@ The old full embedding table may use `int(item_id)` as its row. That convention
 is accepted only during the one-time migration; runtime code always uses an
 explicit mapping.
 
-## 1. Locate and inspect the old server files
+## 1. Download and inspect the official DDBC checkpoint
+
+The official `spotify30.ckpt` contains more than DiT weights: its serialized
+tokenizer also carries the full `(254155, 64)` CLHE item table, the `(768, 64)`
+three-codebook RVQ weights, and semantic tokens for all 254,155 source items.
+Download it into the canonical repository:
+
+```bash
+conda run -n music python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='liaialley/DDBC', filename='spotify30.ckpt', local_dir='checkpoints/pretrained/ddbc')"
+```
+
+The currently verified checkpoint has SHA-256
+`3a44f44dcdd850dbe8c441389c754fae9ae5e3673ab8fe9ce1621e7175ac229f`.
+Treat checkpoints as trusted pickle inputs; do not run the extraction command
+on an untrusted file.
+
+## 2. Extract canonical CLHE/RVQ artifacts
+
+On the NCL server the source catalog is outside the repository. Extract the
+5,119 catalog rows directly from the checkpoint:
+
+```bash
+conda run -n music python scripts/extract_ddbc_checkpoint_artifacts.py \
+  --checkpoint checkpoints/pretrained/ddbc/spotify30.ckpt \
+  --catalog /home/wjzhang/tt_workspace/data/data/dataset/catalog_metadata.json \
+  --output-dir data/dataset \
+  --confirm-dense-item-ids
+```
+
+The explicit confirmation is required even though the official tokenizer was
+verified to contain exhaustive dense IDs `"0".."254154"`. For the current
+catalog all 5,119 IDs are covered, selected CLHE rows are finite `(5119, 64)`,
+the RVQ weights are finite `(768, 64)`, and observed conflict tokens are only
+769–776.
+
+Copy the authoritative catalog alongside those generated artifacts; keep audio
+and lyrics in their external data directory:
+
+```bash
+cp /home/wjzhang/tt_workspace/data/data/dataset/catalog_metadata.json data/dataset/
+```
+
+The CLHE source is the implementation and dataset contract published by
+`Xiaohao-Liu/CLHE`; no separate CLHE retraining is necessary for this subset
+because the official DDBC checkpoint already embeds its trained CLHE table.
+
+## Alternative: convert standalone legacy files
 
 The old code referenced `/home/sjj/wenhao/DISCO/datasets/spotify`, but verify
 the actual mount instead of assuming it:
@@ -57,7 +103,7 @@ print('first:', next(iter(t.items())))
 PY
 ```
 
-## 2. Convert to canonical artifacts
+If standalone legacy files are found, convert them as follows.
 
 Best case: the server already has a source item-to-row mapping:
 
@@ -114,13 +160,37 @@ prints:
 [validate] all GenPlaylist-v1 artifacts are mutually compatible
 ```
 
-## 5. Train a new checkpoint
+## 5. Warm-start and fine-tune a new checkpoint
 
-The old checkpoint is incompatible because vocabulary size, item stride,
-conditioning layers, and loss masking changed.
+The old checkpoint cannot be resumed directly because vocabulary size, item
+stride, conditioning layers, and loss masking changed. It can, however, be
+used as a semantic warm start: the six DiT blocks and other shape-compatible
+weights are copied; the original 1,028-token embedding/output rows are remapped
+to shared token meanings; the 2,048 cue rows and the new playlist-structure
+conditioning layers retain fresh initialization. Optimizer, EMA, epoch, and
+step state start from zero.
 
 ```bash
 bash src/03_backbone_recommender/scripts/train_spotify.sh
+```
+
+The script defaults to `GENPLAYLIST_TRAIN_MODE=warmstart` and the downloaded
+`checkpoints/pretrained/ddbc/spotify30.ckpt`. Subsequent continuation is
+explicit:
+
+```bash
+GENPLAYLIST_TRAIN_MODE=resume \
+  bash src/03_backbone_recommender/scripts/train_spotify.sh
+```
+
+Use `GENPLAYLIST_TRAIN_MODE=scratch` only for the from-scratch ablation. The
+warm start enables time conditioning to match the pretrained DDBC checkpoint.
+
+Before launching the trainer, instantiate the current model and verify the real
+row remapping on CPU:
+
+```bash
+conda run -n music python scripts/check_ddbc_warmstart.py --backward-smoke
 ```
 
 The default Spotify configuration now selects `GenPlaylistTokenizer`, reads the

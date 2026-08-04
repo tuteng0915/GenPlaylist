@@ -30,6 +30,7 @@ import diffusion  # 扩散模型核心模块，定义了扩散过程和模型结
 from evaluator import Evaluator  # 评估器，计算推荐指标（recall、precision等）
 import utils  # 工具函数集合
 from dataset import AbstractDataset  # 抽象数据集类，负责加载原始数据
+from warmstart import apply_ddbc_warmstart
 
 
 # ============ HuggingFace Dataset包装器 ============
@@ -482,9 +483,14 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
   model = diffusion.Diffusion(
     config, tokenizer)  # tokenizer=valid_ds
 
-  # 如果需要加载预训练权重（已注释）
-  # model.load_state_dict(
-  #   load_file(ckpt_path),strict=False)
+  warmstart_path = config.checkpointing.get('warmstart_path', None)
+  if warmstart_path:
+    if ckpt_path is not None:
+      raise ValueError(
+        'checkpointing.warmstart_path cannot be combined with an existing '
+        'resume checkpoint; warm-start begins a new optimizer/step history')
+    warmstart_report = apply_ddbc_warmstart(model, warmstart_path)
+    logger.info('Applied DDBC warm-start: %s', warmstart_report)
 
   # 创建Lightning Trainer
   trainer = hydra.utils.instantiate(

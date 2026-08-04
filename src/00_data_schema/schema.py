@@ -58,6 +58,7 @@ RQ_CODEBOOK_SIZE  = 256
 CLHE_EMB_DIM      = 64
 CONFLICT_VOCAB_SIZE = 74
 CUE_TOKENS        = 8
+CUE_CANDIDATES_PER_ITEM = 16
 CUE_VOCAB_SIZE    = 2048
 TOKENS_PER_ITEM   = 1 + RQ_N_CODEBOOKS + 1 + CUE_TOKENS  # = 13
 
@@ -352,19 +353,26 @@ class CueMappingEntry:
     """Song-to-cue mapping produced by creative_cues (WP-B).
 
     Output file: 02_creative_cues/outputs/item2cues.json
-    Format     : {"0": [c0, c1, c2, c3, c4, c5, c6, c7], "1": [...], ...}
+    Format     : {"0": [c0, c1, ..., c15], "1": [...], ...}
 
     Fields
     ------
     item_id  : string item ID matching clhe_token.json keys.
-    cue_ids  : exactly CUE_TOKENS=8 cue vocab indices, each in [0, CUE_VOCAB_SIZE).
+    cue_ids  : exactly CUE_CANDIDATES_PER_ITEM=16 ranked cue candidates, each in
+               [0, CUE_VOCAB_SIZE). Downstream models select a prefix; the
+               GenPlaylist-v1 default consumes CUE_TOKENS=8.
                Index 0 = 'unknown' fallback.
     """
     item_id: str
     cue_ids: list[int]
 
-    def validate(self, n_cues: int = CUE_TOKENS, vocab_size: int = CUE_VOCAB_SIZE):
-        """n_cues: expected cue count. Defaults to the CUE_TOKENS=8 WP-D contract;
+    def validate(
+        self,
+        n_cues: int = CUE_CANDIDATES_PER_ITEM,
+        vocab_size: int = CUE_VOCAB_SIZE,
+    ):
+        """n_cues: expected stored cue count. Defaults to the 16-candidate
+        cross-WP artifact contract;
         pass the actual count for item2cues.json files produced with a non-default
         --num-cues (run_compare.py) so validation checks against the right length.
 
@@ -383,11 +391,12 @@ class CueMappingEntry:
         return self
 
     @staticmethod
-    def load_mapping(item2cues_path: str, n_cues: int = CUE_TOKENS,
+    def load_mapping(item2cues_path: str, n_cues: int = CUE_CANDIDATES_PER_ITEM,
                      vocab_size: int = CUE_VOCAB_SIZE) -> dict[str, "CueMappingEntry"]:
         """Load item2cues.json → {item_id: CueMappingEntry}.  Validates all entries.
 
-        n_cues: expected cue count per item (default CUE_TOKENS=8, the WP-D contract).
+        n_cues: expected stored cue count per item (default 16). Models may use
+        only a ranked prefix, currently CUE_TOKENS=8.
         Pass the value used to produce the file if it came from a run_compare.py
         --num-cues run that overrode the default.
         vocab_size: expected vocab size (default CUE_VOCAB_SIZE=2048). Pass the value
@@ -469,7 +478,8 @@ class GeneratedItem:
             raise ValueError(f"sigma_c2 must be finite and ≥ 0, got {self.sigma_c2}")
         if not self.cue_ids and allow_missing_cues:
             return self
-        CueMappingEntry(item_id="<generated>", cue_ids=self.cue_ids).validate()
+        CueMappingEntry(item_id="<generated>", cue_ids=self.cue_ids).validate(
+            n_cues=CUE_TOKENS)
         return self
 
 

@@ -64,9 +64,13 @@ class GenPlaylistTokenizer:
             str(item_id): [int(token) for token in tokens]
             for item_id, tokens in semantic_tokens.items()
         }
-        self.item2cues = {
+        self.stored_item2cues = {
             str(item_id): [int(cue) for cue in cues]
             for item_id, cues in item2cues.items()
+        }
+        self.item2cues = {
+            item_id: cues[:CUE_TOKENS]
+            for item_id, cues in self.stored_item2cues.items()
         }
         self.catalog_items = catalog_items
         self.catalog_embeddings = np.asarray(catalog_embeddings, dtype=np.float32)
@@ -107,6 +111,7 @@ class GenPlaylistTokenizer:
             item_id_to_row=mapping,
             codebook_weights_path=configured(
                 "codebook_weights_path", data_root / "rvq_codebook_weights.npy"),
+            active_cues=int(config.get("active_cue_tokens", CUE_TOKENS)),
         )
         tokenizer.max_items = int(config.get("seq_len", 30))
         tokenizer.config = config
@@ -123,6 +128,7 @@ class GenPlaylistTokenizer:
         catalog_embeddings: np.ndarray,
         item_id_to_row: dict[str, int],
         codebook_weights_path: str | Path,
+        active_cues: int = CUE_TOKENS,
     ) -> "GenPlaylistTokenizer":
         manifest = json.loads(Path(cue_manifest_path).read_text(encoding="utf-8"))
         if not manifest.get("wp_d_compatible", False):
@@ -131,10 +137,33 @@ class GenPlaylistTokenizer:
             raise ValueError(
                 f"Cue schema {manifest.get('schema_version')!r} does not match "
                 f"{TOKEN_LAYOUT.schema_version!r}")
-        if manifest.get("cues_per_item") != CUE_TOKENS:
-            raise ValueError(f"WP-D requires exactly {CUE_TOKENS} cues per item")
+        if active_cues != CUE_TOKENS:
+            raise ValueError(
+                f"GenPlaylist-v1 token layout requires active_cues={CUE_TOKENS}, "
+                f"got {active_cues}")
+        stored_cues = int(manifest.get(
+            "stored_cues_per_item", manifest.get("cues_per_item", 0)))
+        if stored_cues < active_cues:
+            raise ValueError(
+                f"Cue artifact stores {stored_cues} cues/item but WP-D needs the "
+                f"first {active_cues}")
+        manifest_active = int(manifest.get("default_active_cues", CUE_TOKENS))
+        if manifest_active != CUE_TOKENS:
+            raise ValueError(
+                f"Cue artifact default_active_cues={manifest_active} does not match "
+                f"the {CUE_TOKENS}-cue token layout")
         semantic_tokens = json.loads(Path(semantic_tokens_path).read_text(encoding="utf-8"))
         item2cues = json.loads(Path(item2cues_path).read_text(encoding="utf-8"))
+        bad_lengths = {
+            str(item_id): len(cues)
+            for item_id, cues in item2cues.items()
+            if len(cues) != stored_cues
+        }
+        if bad_lengths:
+            first = next(iter(bad_lengths.items()))
+            raise ValueError(
+                f"Cue artifact declares {stored_cues} stored cues/item but "
+                f"{first[0]} has {first[1]}")
         weights = np.load(codebook_weights_path, allow_pickle=False)
         return cls(
             semantic_tokens, item2cues, catalog_items, catalog_embeddings,
@@ -164,6 +193,11 @@ class GenPlaylistTokenizer:
                     f"{name} ID mismatch; missing={missing[:5]}, extra={extra[:5]}")
         for item_id in catalog_ids:
             self._validated_semantic_tokens(item_id)
+            stored_cues = self.stored_item2cues[item_id]
+            if len(stored_cues) < CUE_TOKENS:
+                raise ValueError(
+                    f"Item {item_id} stores only {len(stored_cues)} cues; "
+                    f"at least {CUE_TOKENS} are required")
             cues = self.item2cues[item_id]
             if len(cues) != CUE_TOKENS or any(
                 cue < 0 or cue >= TOKEN_LAYOUT.cue_vocab_size for cue in cues):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -25,9 +27,9 @@ def make_tokenizer():
         "73001": [2, 258, 514, 770],
     }
     cues = {
-        "18996": list(range(8)),
-        "48262": list(range(8, 16)),
-        "73001": list(range(16, 24)),
+        "18996": list(range(16)),
+        "48262": list(range(16, 32)),
+        "73001": list(range(32, 48)),
     }
     embeddings = np.stack([
         np.zeros(64, dtype=np.float32),
@@ -62,7 +64,9 @@ def test_decode_item():
         payload, mu_c=np.zeros(64, dtype=np.float32), sigma_c2=1.5)
     assert generated.rvq_codes == (255, 255, 255)
     assert generated.conflict_code == 73
-    assert generated.cue_ids == list(range(8, 16))
+    assert generated.cue_ids == list(range(16, 24))
+    assert tokenizer.stored_item2cues["48262"] == list(range(16, 32))
+    assert tokenizer.item2cues["48262"] == list(range(16, 24))
     expected = tokenizer.codebook_weights[[255, 511, 767]].sum(axis=0)
     assert np.array_equal(generated.z_hat_emb, expected)
     assert np.array_equal(
@@ -86,6 +90,34 @@ def test_type_mask_matches_stride():
     assert legal[5, 769:843].all() and legal[5].sum() == 74
     assert legal[6, 845:2893].all() and legal[6].sum() == 2048
     assert np.flatnonzero(legal[-1]).tolist() == [TOKEN_LAYOUT.eos_token]
+
+
+def test_file_contract_loads_sixteen_and_activates_first_eight():
+    source = make_tokenizer()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        (root / "semantic.json").write_text(
+            json.dumps(source.semantic_tokens), encoding="utf-8")
+        (root / "item2cues.json").write_text(
+            json.dumps(source.stored_item2cues), encoding="utf-8")
+        (root / "manifest.json").write_text(json.dumps({
+            "schema_version": TOKEN_LAYOUT.schema_version,
+            "wp_d_compatible": True,
+            "stored_cues_per_item": 16,
+            "default_active_cues": 8,
+        }), encoding="utf-8")
+        np.save(root / "weights.npy", source.codebook_weights)
+        loaded = GenPlaylistTokenizer.from_files(
+            semantic_tokens_path=root / "semantic.json",
+            item2cues_path=root / "item2cues.json",
+            cue_manifest_path=root / "manifest.json",
+            catalog_items=source.catalog_items,
+            catalog_embeddings=source.catalog_embeddings,
+            item_id_to_row=source.item_id_to_row,
+            codebook_weights_path=root / "weights.npy",
+        )
+        assert len(loaded.stored_item2cues["18996"]) == 16
+        assert loaded.item2cues["18996"] == list(range(8))
 
 
 def test_builds_explicit_full_mask_next_item_slot():

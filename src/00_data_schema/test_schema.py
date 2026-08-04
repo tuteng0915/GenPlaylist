@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(__file__))  # .../src/00_data_schema/
 
 import numpy as np
 from schema import (
-    RQ_N_CODEBOOKS, RQ_CODEBOOK_SIZE, CUE_TOKENS, CUE_VOCAB_SIZE, CLHE_EMB_DIM,
+    RQ_N_CODEBOOKS, RQ_CODEBOOK_SIZE, CUE_CANDIDATES_PER_ITEM, CUE_TOKENS,
+    CUE_VOCAB_SIZE, CLHE_EMB_DIM,
     TOKEN_LAYOUT,
     CatalogItem, ContextPrefix, CueMappingEntry, GeneratedItem, SynthesisResult,
 )
@@ -99,7 +100,8 @@ def test_context_prefix_invalid():
 
 
 def test_cue_mapping_entry_valid():
-    entry = CueMappingEntry(item_id="99", cue_ids=list(range(CUE_TOKENS)))
+    entry = CueMappingEntry(
+        item_id="99", cue_ids=list(range(CUE_CANDIDATES_PER_ITEM)))
     entry.validate()
 
 
@@ -111,7 +113,8 @@ def test_cue_mapping_entry_invalid():
         pass
     try:
         CueMappingEntry(
-            item_id="1", cue_ids=[*range(CUE_TOKENS - 1), CUE_VOCAB_SIZE]
+            item_id="1",
+            cue_ids=[*range(CUE_CANDIDATES_PER_ITEM - 1), CUE_VOCAB_SIZE],
         ).validate()  # out of range
         assert False
     except ValueError:

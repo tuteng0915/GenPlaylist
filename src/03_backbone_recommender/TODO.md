@@ -17,10 +17,12 @@
 - [x] Require at least two references and expose a fixed one-item production sampler.
 - [x] Make recommendation evaluation reject multi-item targets.
 - [x] Replace production next-block sampling with explicit full-mask completion.
+- [x] Add semantic warm-start loading for the official 1,028-token DDBC Spotify checkpoint.
+- [x] Add extraction of the checkpoint's embedded CLHE/RVQ artifacts for the 5,119-item catalog.
 
 ## Remaining / training blockers
 
-- [ ] Generate per-item CLHE, RVQ codebook, semantic-token, and eight-cue artifacts.
+- [ ] Run the verified checkpoint extractor and generate the final eight-cue artifacts on the server.
 - [x] Thread structure conditions through full-mask completion sampling.
 - [ ] Train a new checkpoint; old checkpoints are structurally incompatible.
 - [x] Implement a lazy checkpoint-backed `run_backbone` adapter.

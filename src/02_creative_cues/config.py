@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "00_data_schema"))
-from schema import CUE_VOCAB_SIZE  # noqa: E402
+from schema import CUE_CANDIDATES_PER_ITEM, CUE_TOKENS, CUE_VOCAB_SIZE  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -43,8 +43,13 @@ class ProductionConfig:
     rank_by: str = "idf"                # stage-5 vocabulary selection rule
     vocab_size: int = CUE_VOCAB_SIZE    # 2048; do not change without 00_data_schema sign-off
 
-    # Step 3 — assignment
-    num_cues: int = 8                   # GenPlaylist v1 token layout (c0 ... c7)
+    # Step 3 — assignment. Store a ranked master list; WP-D consumes its first
+    # CUE_TOKENS entries so cue-count ablations never rebuild the mapping.
+    num_cues: int = CUE_CANDIDATES_PER_ITEM
+    active_cues: int = CUE_TOKENS
+    assignment_strategy: str = "relevance"
+    candidate_k: int = 64
+    embedder: str = "minilm"
 
     force: bool = False                 # bypass extraction/cleaning caches
 
@@ -56,8 +61,8 @@ DEFAULT = ProductionConfig()
 PRESETS: dict[str, ProductionConfig] = {
     "default": DEFAULT,
     "tfidf": replace(DEFAULT, method="tfidf"),
-    # Paper/ablation compatibility only.  The resulting mapping is not a valid
-    # GenPlaylist-v1 WP-D input because its per-item stride is not 13.
+    # Paper/ablation compatibility only. It does not match the frozen 16-row
+    # master-table contract and is therefore marked non-production.
     "research-18-cues": replace(DEFAULT, num_cues=18),
 }
 

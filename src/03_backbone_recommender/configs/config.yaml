@@ -11,7 +11,7 @@ mode: train  # train / ppl_eval / sample_eval / rec_eval
 diffusion: absorbing_state
 backbone: dit  # dit / dimamba / ar
 parameterization: subs  # subs / d3pm / sedd
-time_conditioning: False
+time_conditioning: True
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
 
@@ -113,6 +113,10 @@ checkpointing:
   # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
   resume_from_ckpt: true
   resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt
+  # Optional one-time initialization from the official spotify30 checkpoint.
+  # This starts a fresh optimizer/step history and semantically remaps the old
+  # 1028-token vocabulary to GenPlaylist's 2894-token runtime vocabulary.
+  warmstart_path: null
 
 evaluator:
   dataset: spotify
@@ -135,6 +139,9 @@ semantic_tokens_path: null
 codebook_weights_path: null
 item2cues_path: null
 cue_manifest_path: null
+# WP-B stores 16 ranked candidates per song; the v1 token layout consumes the
+# first 8. Changing this requires a new token layout and a separately trained model.
+active_cue_tokens: 8
 feature_type: clhe
 sent_emb_pca: -1
 seq_len: 30
