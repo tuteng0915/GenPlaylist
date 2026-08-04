@@ -29,6 +29,7 @@ CURATED_DIR = Path(os.environ.get(
     "GENPLAYLIST_CURATED_DIR", Path(__file__).resolve().parent / "data" / "curated"))
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs" / "audio"
 LOG_PATH = Path(__file__).resolve().parent / "outputs" / "evaluation_logs" / "user_study.csv"
+FULL_SONG_DURATION_SECONDS = 240.0
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 
@@ -167,7 +168,24 @@ def run_pipeline(text_instruction, pid, variant=None):
         user_instruction=text_instruction,
         audio_duration=30,
     )
-    return result.music_attributes, result.lyric_draft, result.audio_path
+
+    verb_result = _verb_module.verbalize(
+        generated=generated,
+        catalog_embs=catalog_embs,
+        catalog_metadata=catalog_items,
+        k=5
+    )
+
+    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    audio_path = _synth_module.synthesize(
+        music_attributes=verb_result['music_attributes'],
+        lyric_draft=verb_result['lyric_draft'],
+        audio_duration=FULL_SONG_DURATION_SECONDS,
+        output_dir=OUTPUT_DIR,
+        filename=f"generated_{pid}_{ts}"
+    )
+
+    return verb_result['music_attributes'], verb_result['lyric_draft'], audio_path
 
 # ---------------------------------------------------------------------------
 # Logging
