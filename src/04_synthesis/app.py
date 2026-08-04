@@ -12,9 +12,12 @@ import subprocess
 import uuid
 from pathlib import Path
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(SRC_ROOT / "00_data_schema"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gradio as gr
@@ -23,10 +26,21 @@ import gradio as gr
 # Paths
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("GENPLAYLIST_DATA_DIR", REPO_ROOT / "data"))
-AUDIO_DIR = DATA_DIR / "audio" / "spotify"
+_repo_audio_dir = DATA_DIR / "audio" / "spotify"
+_legacy_audio_dir = Path("/home/wjzhang/tt_workspace/data/data/audio/spotify")
+AUDIO_DIR = Path(os.environ.get(
+    "GENPLAYLIST_AUDIO_DIR",
+    _repo_audio_dir if _repo_audio_dir.is_dir() else _legacy_audio_dir,
+))
 CATALOG_PATH = DATA_DIR / "dataset" / "catalog_metadata.json"
+_repo_curated_dir = REPO_ROOT / "data" / "curated"
+_legacy_curated_dir = Path(
+    "/home/wjzhang/tt_workspace/genplaylist-wp4-eval/data/curated"
+)
 CURATED_DIR = Path(os.environ.get(
-    "GENPLAYLIST_CURATED_DIR", Path(__file__).resolve().parent / "data" / "curated"))
+    "GENPLAYLIST_CURATED_DIR",
+    _repo_curated_dir if _repo_curated_dir.is_dir() else _legacy_curated_dir,
+))
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs" / "audio"
 LOG_PATH = Path(__file__).resolve().parent / "outputs" / "evaluation_logs" / "user_study.csv"
 FULL_SONG_DURATION_SECONDS = 240.0
@@ -55,7 +69,12 @@ def get_item_label(item_id):
 # ---------------------------------------------------------------------------
 print("[app] Loading curated playlists...")
 _all_curated = {}
-for fname in os.listdir(CURATED_DIR) if CURATED_DIR.is_dir() else []:
+if not CURATED_DIR.is_dir():
+    raise FileNotFoundError(
+        f"Curated playlist directory not found: {CURATED_DIR}. "
+        "Set GENPLAYLIST_CURATED_DIR to the directory containing playlist JSON files."
+    )
+for fname in os.listdir(CURATED_DIR):
     if fname.endswith('.json'):
         with open(os.path.join(CURATED_DIR, fname)) as f:
             d = json.load(f)
@@ -87,6 +106,9 @@ for pid, variants in sorted(_all_curated.items()):
 
 # Shuffle so playlists are interleaved (balanced exposure)
 random.shuffle(VARIANT_CHOICES)
+if not VARIANT_CHOICES:
+    raise RuntimeError(f"No curated playlist JSON files found in {CURATED_DIR}")
+print(f"[app] Loaded {len(VARIANT_CHOICES)} playlist choices from {CURATED_DIR}")
 
 def label_to_variant(label):
     """Return (pid, variant_data) for a given dropdown label."""
@@ -130,6 +152,15 @@ os.environ['CUDA_VISIBLE_DEVICES'] = str(FREE_GPU)
 # Pipeline
 # ---------------------------------------------------------------------------
 _pipeline = None
+_verb_module = None
+_synth_module = None
+
+
+def _backbone_checkpoint_path():
+    return Path(os.environ.get(
+        "GENPLAYLIST_BACKBONE_CKPT",
+        REPO_ROOT / "checkpoints" / "genplaylist-v1.ckpt",
+    )).expanduser()
 
 def _load_pipeline():
     global _pipeline
@@ -155,37 +186,89 @@ def _load_pipeline():
         synthesis_output_dir=str(OUTPUT_DIR),
     )
 
-def run_pipeline(text_instruction, pid, variant=None):
-    _load_pipeline()
 
-    if variant is None:
-        variant = _all_curated.get(str(pid), [{}])[0]
+def _load_demo_pipeline():
+    """Load the checkpoint-free synthesis path used by the original demo."""
+    global _verb_module, _synth_module
+    if _verb_module is None:
+        print("[app] Loading demo verbalization...")
+        import verbalization as v
+        _verb_module = v
+    if _synth_module is None:
+        print("[app] Loading demo synthesis...")
+        import synthesis as s
+        _synth_module = s
 
+
+def _run_demo_pipeline(text_instruction, pid, variant):
+    from schema import ContextPrefix, GeneratedItem
+    from shared.artifacts import load_catalog_artifacts
+
+    _load_demo_pipeline()
     reference_ids = [str(s['id']) for s in variant['seed_songs']]
-    result = _pipeline.generate(
-        reference_ids,
-        reference_count=len(reference_ids),
-        user_instruction=text_instruction,
-        audio_duration=30,
+    dataset_dir = DATA_DIR / "dataset"
+    artifacts = load_catalog_artifacts(
+        CATALOG_PATH,
+        dataset_dir / "catalog_item_embeddings.npy",
+        dataset_dir / "item_id_to_row.json",
     )
-
+    catalog_items = artifacts.items
+    catalog_embs = artifacts.item_embeddings
+    rng = np.random.default_rng(42)
+    reference_rows = [artifacts.item_id_to_row[item_id] for item_id in reference_ids]
+    reference_center = np.mean(catalog_embs[reference_rows], axis=0).astype(np.float32)
+    generated = GeneratedItem(
+        rvq_codes=(42, 17, 203),
+        conflict_code=5,
+        z_hat_emb=(reference_center + rng.normal(0, 0.05, reference_center.shape)).astype(
+            np.float32),
+        mu_c_emb=reference_center,
+        sigma_c2=0.3,
+        cue_ids=[0] * 8,
+        sample_idx=0,
+        context_prefix=ContextPrefix(
+            item_ids=reference_ids,
+            source='song_only',
+            raw_input=text_instruction,
+        ),
+    )
     verb_result = _verb_module.verbalize(
         generated=generated,
         catalog_embs=catalog_embs,
         catalog_metadata=catalog_items,
-        k=5
+        k=5,
     )
-
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     audio_path = _synth_module.synthesize(
         music_attributes=verb_result['music_attributes'],
         lyric_draft=verb_result['lyric_draft'],
         audio_duration=FULL_SONG_DURATION_SECONDS,
-        output_dir=OUTPUT_DIR,
-        filename=f"generated_{pid}_{ts}"
+        output_dir=str(OUTPUT_DIR),
+        filename=f"generated_{pid}_{ts}",
     )
-
     return verb_result['music_attributes'], verb_result['lyric_draft'], audio_path
+
+def run_pipeline(text_instruction, pid, variant=None):
+    if variant is None:
+        variant = _all_curated.get(str(pid), [{}])[0]
+
+    checkpoint = _backbone_checkpoint_path()
+    if not checkpoint.is_file():
+        print(
+            f"[app] Production checkpoint not found at {checkpoint}; "
+            "using checkpoint-free demo generation."
+        )
+        return _run_demo_pipeline(text_instruction, pid, variant)
+
+    _load_pipeline()
+    reference_ids = [str(s['id']) for s in variant['seed_songs']]
+    result = _pipeline.generate(
+        reference_ids,
+        reference_count=len(reference_ids),
+        user_instruction=text_instruction,
+        audio_duration=FULL_SONG_DURATION_SECONDS,
+    )
+    return result.music_attributes, result.lyric_draft, result.audio_path
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -388,7 +471,8 @@ with gr.Blocks(
                     playlist_dropdown_gen = gr.Dropdown(
                         choices=VARIANT_CHOICES,
                         label="🎶 Select a Playlist Style",
-                        info="The AI will generate a song that fits this playlist's style"
+                        info="The AI will generate a song that fits this playlist's style",
+                        interactive=True,
                     )
                     text_instruction = gr.Textbox(
                         label="✏️ Optional: Describe what you want",
@@ -461,7 +545,8 @@ with gr.Blocks(
                 playlist_dropdown_study = gr.Dropdown(
                     choices=VARIANT_CHOICES,
                     label="🎶 Select a Playlist",
-                    info="You will evaluate songs for this playlist style"
+                    info="You will evaluate songs for this playlist style",
+                    interactive=True,
                 )
                 load_btn = gr.Button("▶️ Load Songs (this may take 1-2 minutes)", variant="secondary")
 
