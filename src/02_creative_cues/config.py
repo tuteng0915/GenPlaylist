@@ -4,12 +4,9 @@ Production runs shouldn't need a wall of CLI flags — pick a preset by name and
 everything else is fixed here. Add a new preset (or tweak DEFAULT) when a
 setting changes, instead of adding a new flag.
 
-The DEFAULT preset reflects what the rank-by / min-df / cue-count comparisons
-in this project concluded (see METHOD_WRITEUP.md and the run reports under
-outputs/runs/): `idf` ranking held its own against `cluster` and `band` on
-vocab health and reconstruction quality, `llm` extraction produced the most
-diverse and coherent cues of the four methods, and 18 cues/song is the budget
-those comparisons were run and validated at.
+The DEFAULT preset is the cross-WP production contract.  Experimental settings
+remain available as explicitly named presets, but must never silently become
+the artifacts consumed by WP-D.
 """
 
 from __future__ import annotations
@@ -47,9 +44,7 @@ class ProductionConfig:
     vocab_size: int = CUE_VOCAB_SIZE    # 2048; do not change without 00_data_schema sign-off
 
     # Step 3 — assignment
-    num_cues: int = 18                  # cues assigned per song (schema default is 6 — see
-                                         # METHOD_WRITEUP.md's non-default-cue-count note; this
-                                         # preset intentionally uses the validated 18-cue budget)
+    num_cues: int = 8                   # GenPlaylist v1 token layout (c0 ... c7)
 
     force: bool = False                 # bypass extraction/cleaning caches
 
@@ -61,7 +56,9 @@ DEFAULT = ProductionConfig()
 PRESETS: dict[str, ProductionConfig] = {
     "default": DEFAULT,
     "tfidf": replace(DEFAULT, method="tfidf"),
-    "schema-default-cues": replace(DEFAULT, num_cues=6),
+    # Paper/ablation compatibility only.  The resulting mapping is not a valid
+    # GenPlaylist-v1 WP-D input because its per-item stride is not 13.
+    "research-18-cues": replace(DEFAULT, num_cues=18),
 }
 
 

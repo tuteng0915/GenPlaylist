@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import json
 import pickle
 import os
+from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import cosine_distances
 import matplotlib.pyplot as plt
@@ -22,14 +23,27 @@ class Evaluator:
         }
         self.cir = config['cir']
         self.maxk = max(config['topk'])
-        if self.config['sent_emb_pca'] > 0:
-            self.feature = np.load(f"/home/sjj/wenhao/DISCO/datasets/{config['dataset']}/{config['feature_type']}_pca.npy")
-            self.feature = torch.tensor(self.feature, dtype=torch.float32)
+        if hasattr(tokenizer, 'catalog_embeddings'):
+            self.feature = torch.as_tensor(
+                tokenizer.catalog_embeddings, dtype=torch.float32)
+            self.id2token = tokenizer.semantic_tokens
+            self.item_id_to_row = tokenizer.item_id_to_row
+            dataset_dir = Path(tokenizer.dataset_dir or ".")
         else:
-            self.feature = torch.load(f"/home/sjj/wenhao/DISCO/datasets/{config['dataset']}/{config['feature_type']}.pt")
-
-
-        self.id2token = json.load(open(f"/home/sjj/wenhao/DISCO/datasets/{config['dataset']}/{config['feature_type']}_token.json", 'r'))
+            configured_root = config.get('data_root', None)
+            dataset_dir = Path(configured_root).expanduser() if configured_root else Path(__file__).resolve().parents[2] / 'data' / 'dataset'
+            if self.config['sent_emb_pca'] > 0:
+                self.feature = torch.as_tensor(
+                    np.load(dataset_dir / f"{config['feature_type']}_pca.npy"),
+                    dtype=torch.float32)
+            else:
+                self.feature = torch.load(
+                    dataset_dir / f"{config['feature_type']}.pt")
+            with (dataset_dir / f"{config['feature_type']}_token.json").open(
+                    'r', encoding='utf-8') as handle:
+                self.id2token = json.load(handle)
+            self.item_id_to_row = {str(item_id): int(item_id) for item_id in self.id2token}
+        self.dataset_dir = dataset_dir
         self.token2id = {tuple(v): k for k, v in self.id2token.items()}
 
         # 候选集缓存相关
@@ -81,10 +95,9 @@ class Evaluator:
             return
 
         self.predict_num_items = predict_num_items
-        self.candidate_cache_file = (
-            f"/home/sjj/wenhao/DISCO/datasets/{self.config['dataset']}/"
-            f"test_candidates_seed{self.seed}_x{self.candidate_multiplier}_items{predict_num_items}.pkl"
-        )
+        self.candidate_cache_file = str(
+            self.dataset_dir /
+            f"test_candidates_seed{self.seed}_x{self.candidate_multiplier}_items{predict_num_items}.pkl")
 
         # 尝试加载缓存的候选集
         if os.path.exists(self.candidate_cache_file):
@@ -348,7 +361,7 @@ class Evaluator:
         result = torch.zeros(self.feature.shape[1],
                             dtype=self.feature.dtype)
         try:
-            idx = int(self.token2id[tuple(token_list)])
+            idx = self.item_id_to_row[str(self.token2id[tuple(token_list)])]
             result = self.feature[idx]
         except:
             result = self.tokenizer._token_to_feature(token_list)
@@ -394,6 +407,10 @@ class Evaluator:
 
         Supports candidate set caching for reproducibility across different models.
         """
+        if labels.ndim != 3 or labels.shape[1] != 1:
+            raise ValueError(
+                f"GenPlaylist evaluation requires one next-item label, got {labels.shape}")
+
         # Get n_codebooks for dynamic fallback generation
         n_codebooks = self.tokenizer.n_digit
         codebook_size = self.tokenizer.config['rq_codebook_size']
@@ -409,8 +426,7 @@ class Evaluator:
         if self.predict_num_items is None:
             # 从labels的shape推断predict_num_items
             # labels shape: [batch_size, predict_num_items, n_codebooks+1]
-            predict_num_items = labels.shape[1]
-            self._initialize_candidate_cache(predict_num_items)
+            self._initialize_candidate_cache(1)
 
         token_values_set = set(self.token2id.values())
         # Match pred_items shape to preds, not labels
@@ -432,24 +448,27 @@ class Evaluator:
             if self.candidate_pool is not None:
                 # 使用缓存的候选集
                 candidate_items = self.candidate_pool[global_sample_idx]
-                candidate_items = [int(id) for id in candidate_items]
+                candidate_items = [str(item_id) for item_id in candidate_items]
             else:
                 # 生成新的候选集
-                candidate_items = list(label_items) + np.random.choice(
-                    list(remaining_items), size=len(labels[i])*self.candidate_multiplier, replace=False).tolist()
-                candidate_items = [int(id) for id in candidate_items]
+                sample_size = min(
+                    len(remaining_items), len(labels[i]) * self.candidate_multiplier)
+                sampled = np.random.choice(
+                    list(remaining_items), size=sample_size, replace=False).tolist()
+                candidate_items = [str(item_id) for item_id in list(label_items) + sampled]
                 # 记录到缓冲区，用于后续保存（保存副本，避免后续pop修改）
                 self.candidate_buffer.append(candidate_items.copy())
 
             for m in range(preds.shape[1]):
                 for k in range(preds.shape[2]):
-                    candidate_feature = self.feature[candidate_items].cpu().numpy()
+                    candidate_rows = [self.item_id_to_row[item_id] for item_id in candidate_items]
+                    candidate_feature = self.feature[candidate_rows].cpu().numpy()
 
                     # 尝试直接查找预测的RVQ是否对应真实item
                     rvq_direct_hit = False
                     try:
                         comp_token = self.token2id[tuple(preds[i][m][k].tolist())]
-                        feature = self.feature[int(comp_token)] #int()
+                        feature = self.feature[self.item_id_to_row[str(comp_token)]]
                         rvq_direct_hit = True
                         self.rvq_direct_hit_count += 1
                     except:
@@ -484,7 +503,7 @@ class Evaluator:
                     for sm_idx in top_sm_indices:
                         iid_sm = candidate_items[sm_idx]
                         try:
-                            tpl_sm = tuple(self.id2token[str(int(iid_sm))])
+                            tpl_sm = tuple(self.id2token[str(iid_sm)])
                             sm_topk_cache[i][k].add(tpl_sm)
                         except Exception:
                             pass
@@ -846,10 +865,8 @@ class Evaluator:
         processed_preds = []
 
         # Calculate tokens_per_item early for trimming logic
-        # tokens_per_item = BOI + n_digit RVQ codes + 1 conflict
-        # 3 codebooks: 5 tokens/item (BOI, d0, d1, d2, conflict)
-        # 4 codebooks: 6 tokens/item (BOI, d0, d1, d2, d3, conflict)
-        tokens_per_item = n_codebooks + 2
+        tokens_per_item = getattr(
+            self.tokenizer, 'tokens_per_item', n_codebooks + 2)
 
         for b in range(batch_size):
             for k in range(max_k):
@@ -901,8 +918,9 @@ class Evaluator:
         preds = padded_preds[:, :, :num_items*tokens_per_item].reshape(batch_size, max_k, num_items, tokens_per_item)
         print(f"  After reshape: {preds.shape}, num_items per sample: {num_items}")
 
-        # Remove BOI column (first column) to get n_digit-digit item codes
-        preds = preds[:, :, :, 1:]  # Shape: [batch, max_k, num_items, n_digit+1] (n_digit RVQ + 1 conflict)
+        # Keep only semantic tokens; creative cues are evaluated separately.
+        semantic_width = n_codebooks + 1
+        preds = preds[:, :, :, 1:1 + semantic_width]
 
         # Show extracted RVQ tokens (all items if <= 5, otherwise first 5)
         num_to_print = min(num_items, 5)
@@ -917,8 +935,12 @@ class Evaluator:
         # Each item has (n_codebooks + 1) tokens in test_gt format: d0, d1, d2, ..., conflict
         # 3 codebooks: 5 tokens/item (d0,d1,d2,d3_conflict,final_conflict)
         # 4 codebooks: 5 tokens/item (d0,d1,d2,d3,conflict)
-        tokens_per_item_label = n_codebooks + 1  # Include conflict digit
-        labels_item = labels[:, 1:-1].reshape(labels.shape[0], -1, tokens_per_item_label)
+        tokens_per_item_label = n_codebooks + 1
+        if labels.ndim == 3:
+            labels_item = labels
+        else:
+            labels_item = labels[:, 1:-1].reshape(
+                labels.shape[0], -1, tokens_per_item_label)
 
         # Check if labels have duplicate items (for debugging)
         label_tuples = [tuple(labels_item[0, i].tolist()) for i in range(labels_item.shape[1])]
@@ -1059,4 +1081,3 @@ class Evaluator:
                     results[f"{metric}@{k}"] = result
 
         return results
-

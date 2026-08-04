@@ -48,7 +48,7 @@ def finish_from_raw(
 
     dedup_threshold: cosine above which two cues are merged in semantic dedup
                      (higher = fewer merges = larger vocabulary).
-    num_cues: cues assigned per song. A non-schema value (default CUE_TOKENS=6)
+    num_cues: cues assigned per song. A non-schema value (default CUE_TOKENS=8)
               still validates and exports fine, but the output item2cues.json
               only round-trips through CueMappingEntry.load_mapping() if that
               loader is told the same n_cues.

@@ -1,4 +1,4 @@
-# GenPlaylist: Structure-Aware Playlist Generation via Latent Expansion
+# GenPlaylist: Reference-Conditioned Next-Song Generation with DDBC
 
 **Authors:** Anonymous | **Venue:** Under review | **Year:** 2025
 **Local PDF:** [main.pdf](../main.pdf)
@@ -7,7 +7,7 @@
 
 ## TL;DR
 
-GenPlaylist bridges playlist recommendation and music synthesis by treating playlist continuation as latent space expansion rather than catalog retrieval. Given a seed set of songs, it models the playlist's semantic centroid and dispersion, expands the latent representation via dispersion-conditioned masked discrete diffusion (adapted from DDBC), verbalizes the generated embeddings into lyrics and style attributes via an LLM, and synthesizes new audio with ACE-Step. The result is a system that generates genuinely new music that fits the playlist's structure rather than selecting from an existing catalog.
+GenPlaylist bridges next-item recommendation and music synthesis. Given multiple ordered reference tracks, it uses DDBC to predict exactly one next-item latent while conditioning on the references' semantic centroid and dispersion. An LLM verbalizes that latent into attributes and lyrics, and ACE-Step synthesizes one original next song. The output is generated music rather than a retrieved catalog item.
 
 ---
 
@@ -25,29 +25,29 @@ GenPlaylist bridges playlist recommendation and music synthesis by treating play
 Four-stage pipeline:
 
 ```
-Seed set C
+Ordered references C = (m1, ..., mt), t ≥ 2
   → [§4.1] CLHE encode → compute μ_C, σ²_C
   → [§4.2] RVQ discretize → token matrix Z^(0) ∈ N^(|C|×L)
-  → [§4.3] Dispersion-conditioned masked diffusion → Ẑ_Y (n new latent codes)
-  → [§4.4] Latent verbalization (top-k neighbor lookup + LLM) → lyrics L_j, attributes A_j
-  → [§4.5] ACE-Step synthesis → n new audio tracks
+  → [§4.3] DDBC masked diffusion → one next-item latent ẑ_(t+1)
+  → [§4.4] Latent verbalization (top-k lookup + LLM) → lyrics L, attributes A
+  → [§4.5] ACE-Step synthesis → one next-song audio track
 ```
 
 **Key concepts:**
 
-**Semantic centroid & dispersion** (§3): For seed set C, compute
+**Semantic centroid & dispersion** (§3): For reference sequence C, compute
 - μ_C = mean of CLHE embeddings
 - σ²_C = mean squared distance from centroid
 
-A valid continuation should scatter around μ_C at scale σ²_C (Cohesion) while each piece differing from all seeds (Novelty).
+A valid next song should be compatible with the reference structure while remaining distinct from every reference.
 
 **RVQ** (§4.2): Each continuous embedding E(m) ∈ ℝ^d is discretized into an L-level code tuple z(m) = (z_{m,1}, …, z_{m,L}) via residual vector quantization. Codebooks are trained with the encoder. This is identical to the DDBC tokenization.
 
-**Dispersion-conditioned masked discrete diffusion** (§4.3): Absorbing-mask Markov chain; at each step t, target tokens are masked with probability β_t. The reverse denoiser (bidirectional Transformer) conditions on σ²_C and μ_C projected into embedding space and **prepended as context tokens** before the target slots. Seed tokens are never masked (fixed context). Training objective: NELBO = -E[log p_θ(z^(0)_{j,ℓ} | Z^(t), t, μ_C, σ²_C)].
+**Dispersion-conditioned masked discrete diffusion** (§4.3): The DDBC absorbing-mask process corrupts only the single next-item payload. At inference the system appends `[BOI, MASK×12, EOS]` and jointly denoises those twelve positions; it does not autoregressively append multiple blocks. The bidirectional DiT conditions on projected σ²_C and μ_C through AdaLN, while reference tokens remain fixed.
 
-**Latent verbalization** (§4.4): Find top-k nearest catalog neighbors of each generated Ê(m_j) by cosine similarity in CLHE space. Read off their metadata as a vocabulary. Playlist-level lookup on μ_C produces a shared style summary prepended to all slots.
+**Latent verbalization** (§4.4): Find top-k catalog neighbors of the single predicted latent by cosine similarity in CLHE space. The prompt includes the actual ordered references, target-latent neighbors, creative cues, and a reference-centroid style summary.
 
-**Lyric & attribute generation** (§4.5): LLM (Qwen3) produces music attributes A_j = {genre, mood, tempo, instrumentation, key, language} and a lyric draft L_j following ACE-Step markup (verse/chorus/bridge markers). ACE-Step synthesizes audio conditioning on attributes, lyrics, and the nearest neighbor's audio as reference.
+**Lyric & attribute generation** (§4.5): The LLM produces one attribute set A = {genre, mood, tempo, instrumentation, key, language} and one lyric draft L following ACE-Step markup. ACE-Step then synthesizes the next-song audio.
 
 ---
 
@@ -55,8 +55,8 @@ A valid continuation should scatter around μ_C at scale σ²_C (Cohesion) while
 
 ### Figure 1 — Full Pipeline Overview
 ![Fig 3](fig_3-3.png)
-**What it shows:** End-to-end flow from seed songs + text instruction through diffusion-based playlist expansion, latent-to-text decoding (Route C preferred), LLM lyric/tag generation, to final audio synthesis.
-**Key insight:** The "main research contribution" (left half) is the diffusion expansion module. The right half (verbalization + synthesis) is engineering/demo infrastructure. The paper's novelty claim is squarely in the latent expansion stage.
+**What it shows:** End-to-end flow from multiple references + optional instruction through DDBC next-item prediction, latent verbalization, and one-song synthesis.
+**Key insight:** The research question is whether a DDBC next-item latent can serve as a useful semantic plan for generating the next song rather than retrieving it.
 
 ### Figure — Dispersion Conditioning & Evaluation Setup
 ![Fig 4](fig_4-4.png)
@@ -78,7 +78,7 @@ All result cells are redacted in this draft. Planned comparison groups:
 |---|---|
 | Retrieval-based | Pop, SASRec, BGCN, **DDBC** |
 | Continuous diffusion | DiffRec, DMSR |
-| Generative (no latent expansion) | MusicGen-Text, ACE-Step-LLM |
+| Generative (no DDBC next-item plan) | MusicGen-Text, ACE-Step-LLM |
 | GenPlaylist ablations | w/o disp., w/o verbal., **Full** |
 
 Evaluation: FAD↓ (audio quality), CLAP↑ (lyric/attribute adherence), human Coherence/Quality/Overall↑. Also: Dispersion Match Δσ²↓ and Centroid Distance CD↓ (structural metrics, ablation only).
@@ -87,7 +87,7 @@ Evaluation: FAD↓ (audio quality), CLAP↑ (lyric/attribute adherence), human C
 
 ## Strengths
 
-- Elegant reuse of DDBC's discrete diffusion machinery for a genuinely new task (latent expansion vs. catalog retrieval)
+- Reuses DDBC's discrete diffusion machinery for a clear next-item generation task
 - Dispersion conditioning explicitly models playlist-level semantic structure — one model handles both compact and diverse playlists
 - Text as the bridge between incompatible embedding spaces is well-motivated and avoids the paired-data problem
 - Evaluation design avoids the GT-matching trap (generated music can't overlap catalog by construction)
@@ -98,17 +98,17 @@ Evaluation: FAD↓ (audio quality), CLAP↑ (lyric/attribute adherence), human C
 - CLHE encoder is proprietary to NetEase; reproducibility on other datasets depends on a substitute encoder
 - Lyrics → audio quality ultimately bottlenecked by ACE-Step and Qwen3, not the diffusion module
 - No ablation on the number of RVQ levels L or codebook size
-- σ²_C from a small seed set (|p|/2 songs) may be a noisy dispersion estimate
+- σ²_C can be noisy when only two or three reference songs are supplied
 
 ## Open Questions
 
-- How sensitive is generation quality to seed set size? The paper uses first ⌊|p|/2⌋ as seeds.
+- How sensitive is generation quality to the number and order of reference songs?
 - Can the verbalization step be skipped with a direct latent→audio decoder (bridging the embedding incompatibility)?
-- How does Novelty (cosine distance from seeds) trade off against Cohesion in practice?
+- How does novelty (distance from references) trade off against next-song compatibility?
 - Is CLHE replaceable with CLAP or MERT for open-source reproducibility?
 
 ---
 
 ## One-line Takeaway
 
-> GenPlaylist repurposes DDBC's discrete diffusion from bundle retrieval to playlist *generation* by conditioning on per-playlist semantic dispersion and routing generated latents through text to a music synthesis model.
+> GenPlaylist uses DDBC to plan one next-item latent from multiple references, then turns that plan into one original song through verbalization and audio synthesis.

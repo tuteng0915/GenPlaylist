@@ -1,4 +1,4 @@
-"""Evaluation matrix for generated vs ground-truth playlists.
+"""Corpus-level evaluation for generated vs ground-truth next songs.
 
 Implements the two encoder-based metrics kept for WP-D Part 4:
 
@@ -8,8 +8,8 @@ Implements the two encoder-based metrics kept for WP-D Part 4:
                 1 - similarity), then the matched similarities are averaged.
                 This is the DDBC-style optimal-matching / OAS score restricted
                 to the CLAP embedding space.
-  * FAD       — Frechet Audio Distance between the generated set and the
-                ground-truth set (frechet_audio_distance, VGGish backbone).
+  * FAD       — Frechet Audio Distance between all generated next songs and
+                all held-out ground-truth next songs in an evaluation corpus.
   * CLAP_Sim  — Condition-adherence check: mean cosine similarity between each
                 generated song's CLAP audio embedding and the CLAP text
                 embedding of the prompt (only when ``prompt_text`` is given).
@@ -60,6 +60,11 @@ def _clap_oas(gen_emb, gt_emb):
 
     gen_n = _l2_normalize(gen_emb)
     gt_n = _l2_normalize(gt_emb)
+    if gen_n.ndim != 2 or gt_n.ndim != 2 or not len(gen_n) or not len(gt_n):
+        raise ValueError("CLAP OAS requires two non-empty 2-D embedding matrices")
+    if gen_n.shape[1] != gt_n.shape[1]:
+        raise ValueError(
+            f"CLAP embedding dimensions differ: {gen_n.shape[1]} vs {gt_n.shape[1]}")
     sim = gen_n @ gt_n.T  # (n_gen, n_gt) cosine similarity matrix
     cost = 1.0 - sim
     row_idx, col_idx = linear_sum_assignment(cost)
@@ -100,13 +105,13 @@ def _compute_fad(gen_paths, gt_paths):
 
 
 def evaluate(generated_audio_paths, ground_truth_audio_paths, prompt_text=None):
-    """Score a generated playlist against a ground-truth playlist.
+    """Score aligned generated and ground-truth next-song collections.
 
     Args:
         generated_audio_paths: iterable of audio file paths for the generated
-            (predicted) playlist.
+            next songs, one per reference sequence.
         ground_truth_audio_paths: iterable of audio file paths for the
-            ground-truth continuation playlist.
+            held-out next songs in the same example order.
         prompt_text: optional text prompt / creative cue. When provided,
             CLAP_Sim measures how well the generated audio adheres to it.
 
@@ -116,9 +121,11 @@ def evaluate(generated_audio_paths, ground_truth_audio_paths, prompt_text=None):
     """
     generated_audio_paths = list(generated_audio_paths)
     ground_truth_audio_paths = list(ground_truth_audio_paths)
+    if not generated_audio_paths or not ground_truth_audio_paths:
+        raise ValueError("Generated and ground-truth audio sets must both be non-empty")
 
     for p in generated_audio_paths + ground_truth_audio_paths:
-        if not os.path.exists(p):
+        if not os.path.isfile(p):
             raise FileNotFoundError(f"Audio file not found: {p}")
 
     model = _load_clap()

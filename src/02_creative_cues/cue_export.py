@@ -15,7 +15,7 @@ Interface contract
 Schema constants (do NOT change without coordinating with 00_data_schema)
 -------------------------------------------------------------------------
   CUE_VOCAB_SIZE = 2048    (index 0 = '<unk>')
-  CUE_TOKENS     = 6       (c0 … c5, per song; experiments may override via num_cues)
+  CUE_TOKENS     = 8       (c0 … c7, per song; experiments may override via num_cues)
 """
 
 from __future__ import annotations
@@ -26,7 +26,14 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '00_data_schema'))
-from schema import CUE_VOCAB_SIZE  # noqa: E402
+from schema import (  # noqa: E402
+    CUE_TOKENS,
+    CUE_VOCAB_SIZE,
+    SCHEMA_VERSION,
+    TOKEN_LAYOUT,
+)
+
+import cue_io  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +48,13 @@ def load_vocab(vocab_path: str) -> list[str]:
     """Load cue_vocab.json.  Validates that index 0 == '<unk>'."""
     with open(vocab_path, "r", encoding="utf-8") as f:
         vocab = json.load(f)
-    assert isinstance(vocab, list), "cue_vocab.json must be a JSON list."
-    assert len(vocab) == CUE_VOCAB_SIZE, \
-        f"Expected {CUE_VOCAB_SIZE} entries, got {len(vocab)}."
-    assert vocab[0] == UNK_CUE_STRING, \
-        f"vocab[0] must be '{UNK_CUE_STRING}', got '{vocab[0]}'."
+    if not isinstance(vocab, list):
+        raise ValueError("cue_vocab.json must be a JSON list")
+    if len(vocab) != CUE_VOCAB_SIZE:
+        raise ValueError(f"Expected {CUE_VOCAB_SIZE} entries, got {len(vocab)}")
+    if vocab[0] != UNK_CUE_STRING:
+        raise ValueError(
+            f"vocab[0] must be '{UNK_CUE_STRING}', got '{vocab[0]}'")
     return vocab
 
 
@@ -60,7 +69,7 @@ def export_outputs(
 ) -> None:
     """Write cue_vocab.json and item2cues.json to output_dir.
 
-    item2cues.json format: {"item_id": [c0, c1, c2, c3, c4, c5], ...}
+    item2cues.json format: {"item_id": [c0, c1, c2, c3, c4, c5, c6, c7], ...}
     This is the format that CueMappingEntry.load_mapping() reads.
 
     Parameters
@@ -71,17 +80,46 @@ def export_outputs(
     output_dir : directory to write files.
     """
     os.makedirs(output_dir, exist_ok=True)
+    if not vocab or vocab[0] != UNK_CUE_STRING:
+        raise ValueError(
+            f"Cue vocab must reserve index 0 for {UNK_CUE_STRING!r}")
+
+    cue_counts = {len(entry.cue_ids) for entry in item2cues.values()}
+    if len(cue_counts) > 1:
+        raise ValueError(f"Inconsistent cue counts in item2cues: {sorted(cue_counts)}")
+    num_cues = cue_counts.pop() if cue_counts else CUE_TOKENS
+    for item_id, entry in item2cues.items():
+        if str(item_id) != str(entry.item_id):
+            raise ValueError(
+                f"Mapping key {item_id!r} disagrees with entry.item_id {entry.item_id!r}")
+        entry.validate(n_cues=num_cues, vocab_size=len(vocab))
 
     vocab_path = os.path.join(output_dir, "cue_vocab.json")
-    with open(vocab_path, "w", encoding="utf-8") as f:
-        json.dump(vocab, f, ensure_ascii=False, indent=2)
+    cue_io.atomic_write_json(vocab_path, vocab)
     print(f"[cue_export] Wrote vocab ({len(vocab)} entries) -> {vocab_path}")
 
     mapping = {iid: entry.cue_ids for iid, entry in item2cues.items()}
     cues_path = os.path.join(output_dir, "item2cues.json")
-    with open(cues_path, "w", encoding="utf-8") as f:
-        json.dump(mapping, f)
+    cue_io.atomic_write_json(cues_path, mapping)
     print(f"[cue_export] Wrote item2cues ({len(mapping)} items) -> {cues_path}")
+
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "wp_d_compatible": (
+            num_cues == CUE_TOKENS and len(vocab) == CUE_VOCAB_SIZE),
+        "n_items": len(mapping),
+        "cue_vocab_size": len(vocab),
+        "cues_per_item": num_cues,
+        "token_layout": {
+            "tokens_per_item": TOKEN_LAYOUT.tokens_per_item,
+            "bos": 0,
+            "boi": TOKEN_LAYOUT.boi_token,
+            "eos": TOKEN_LAYOUT.eos_token,
+            "cue_start": TOKEN_LAYOUT.cue_token_start,
+            "mask": TOKEN_LAYOUT.mask_token,
+        },
+    }
+    cue_io.atomic_write_json(os.path.join(output_dir, "cue_manifest.json"), manifest)
 
 
 # ---------------------------------------------------------------------------

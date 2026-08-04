@@ -1,6 +1,7 @@
 name: tiny
 type: ddit
 hidden_size: 512
+context_dim: 64  # frozen CLHE embedding dimension
 cond_dim: 128
 length: 1024
 n_blocks: 8

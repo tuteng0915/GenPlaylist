@@ -37,7 +37,6 @@ Implementation roadmap (see TODO.md)
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 
@@ -53,18 +52,8 @@ from typing import Union
 # ---------------------------------------------------------------------------
 
 def load_catalog_from_dict(catalog_path: str) -> list[CatalogItem]:
-    """Load catalog_metadata.json into a list of CatalogItem.
-
-    catalog_metadata.json is stored as {item_id: {fields}} (a dict), not a list,
-    so CatalogItem.load_catalog() — which iterates a JSON array — fails on it.
-    """
-    with open(catalog_path, 'r', encoding='utf-8') as f:
-        raw = json.load(f)
-    valid_fields = set(CatalogItem.__dataclass_fields__)
-    return [
-        CatalogItem(**{k: v for k, v in entry.items() if k in valid_fields})
-        for entry in raw.values()
-    ]
+    """Compatibility alias for the shared dict/list catalog loader."""
+    return CatalogItem.load_catalog(catalog_path)
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +145,10 @@ def _greedy_coverage_select(
         return item_ids[:K]
 
     id_to_row = {iid: i for i, iid in enumerate(catalog_id_list)}
-    rows = [id_to_row[iid] for iid in item_ids if iid in id_to_row]
+    missing = [iid for iid in item_ids if iid not in id_to_row]
+    if missing:
+        raise ValueError(f"Candidate IDs missing from embedding row order: {missing[:5]}")
+    rows = [id_to_row[iid] for iid in item_ids]
 
     embs = catalog_embs[rows].astype(np.float32)
     norms = np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9
@@ -223,6 +215,27 @@ def retrieve_by_embedding(
     -------
     list[str]: top-K item IDs sorted by descending similarity.
     """
+    query_emb = np.asarray(query_emb, dtype=np.float32)
+    catalog_embs = np.asarray(catalog_embs, dtype=np.float32)
+    if query_emb.ndim != 1:
+        raise ValueError(f"query_emb must be 1-D, got shape {query_emb.shape}")
+    if catalog_embs.ndim != 2:
+        raise ValueError(f"catalog_embs must be 2-D, got shape {catalog_embs.shape}")
+    if catalog_embs.shape[0] != len(catalog_ids):
+        raise ValueError(
+            f"catalog_embs has {catalog_embs.shape[0]} rows but catalog_ids has {len(catalog_ids)} entries"
+        )
+    if catalog_embs.shape[1] != query_emb.shape[0]:
+        raise ValueError(
+            f"Embedding dimension mismatch: query={query_emb.shape[0]}, catalog={catalog_embs.shape[1]}"
+        )
+    if K <= 0:
+        raise ValueError(f"K must be positive, got {K}")
+    if not np.isfinite(query_emb).all() or not np.isfinite(catalog_embs).all():
+        raise ValueError("Embeddings must contain only finite values")
+    if np.linalg.norm(query_emb) <= 1e-12:
+        raise ValueError("query_emb must be non-zero")
+
     q = query_emb / (np.linalg.norm(query_emb) + 1e-9)
     C = catalog_embs / (np.linalg.norm(catalog_embs, axis=1, keepdims=True) + 1e-9)
     sims = C @ q
@@ -312,7 +325,7 @@ def normalize(
         For text_only: pass catalog_text_embs.npy or catalog_clap_embs.npy.
         For hybrid/expansion: any embedding space works (same space used for all ops).
     K:
-        Target context prefix length.
+        Target reference-set length. Must be at least two for next-song generation.
     text_encoder:
         Encoder with .encode(text, normalize_embeddings=True) → np.ndarray.
         Required for text-only and hybrid inputs.
@@ -329,7 +342,24 @@ def normalize(
     NotImplementedError : if text_encoder is required but not provided.
     ValueError          : if input is empty or contains no resolvable items.
     """
+    if K < 2:
+        raise ValueError(f"Next-song generation requires K >= 2 references, got {K}")
+    if not catalog_metadata:
+        raise ValueError("catalog_metadata must not be empty")
+
     catalog_id_list = [item.item_id for item in catalog_metadata]
+    if K > len(catalog_id_list):
+        raise ValueError(f"K={K} exceeds catalog size {len(catalog_id_list)}")
+    if len(set(catalog_id_list)) != len(catalog_id_list):
+        raise ValueError("catalog_metadata contains duplicate item IDs")
+    if catalog_embs is not None:
+        catalog_embs = np.asarray(catalog_embs, dtype=np.float32)
+        if catalog_embs.ndim != 2 or catalog_embs.shape[0] != len(catalog_metadata):
+            raise ValueError(
+                "catalog_embs must be a 2-D per-item matrix with one row per catalog item; "
+                f"got {catalog_embs.shape} for {len(catalog_metadata)} items"
+            )
+
     catalog_id_set  = set(catalog_id_list)
     id_to_item      = {item.item_id: item for item in catalog_metadata}
 
@@ -349,6 +379,8 @@ def normalize(
 
     # --- text-only ---
     elif input_type == 'text_only':
+        if not user_input.strip():
+            raise ValueError("Text-only input must not be blank")
         # Allow a bare numeric string to be treated as a single item ID
         if user_input.strip().isdigit() and user_input.strip() in catalog_id_set:
             selected = [user_input.strip()]
@@ -397,6 +429,11 @@ def normalize(
                 additions = [iid for iid in candidates if iid not in seen_seeds][:n_needed]
             selected = valid_seeds + additions
 
+            # A hybrid request containing only seed IDs still has a well-defined
+            # completion: expand from their embedding centroid.
+            if len(selected) < K and selected:
+                selected = expand_to_K(selected, catalog_embs, catalog_id_list, K)
+
         if not selected:
             raise ValueError("No valid catalog items found in hybrid input.")
 
@@ -416,4 +453,7 @@ def normalize(
         items=items,
     )
     ctx.validate()
+    if len(ctx.item_ids) != K:
+        raise ValueError(
+            f"Could not construct a full context prefix: expected {K}, got {len(ctx.item_ids)}")
     return ctx

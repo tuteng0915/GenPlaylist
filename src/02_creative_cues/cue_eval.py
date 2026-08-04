@@ -9,7 +9,7 @@ Level 2 — semantic retrieval (no LLM):
     Reports whether the source song appears in the top K / at what rank.
 
 Level 3 — reconstruction ablation (the encode -> decode -> score loop):
-    real lyrics --encode--> 6 cues --decode(LLM)--> regenerated lyrics
+    real lyrics --encode--> 8 cues --decode(LLM)--> regenerated lyrics
                             real lyrics <--BLEU/ROUGE/BERTScore-- regenerated
     Run with several decoder inputs (none / each method's cues / oracle) and
     compare: if cues carry information, scores rise above the metadata-only floor.
@@ -440,7 +440,7 @@ _ORACLE_SYSTEM = (
 
 
 def oracle_cues_by_id(catalog_by_id, lyrics_dict, sample_ids, n_cues: int = 6) -> dict[str, list[str]]:
-    """Oracle ceiling: 6 cues an LLM extracts from each song's REAL lyrics (cached)."""
+    """Oracle ceiling: n_cues an LLM extracts from each song's REAL lyrics (cached)."""
     out: dict[str, list[str]] = {}
     for iid in sample_ids:
         ref = lyrics_dict.get(iid, "")

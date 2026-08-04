@@ -1,8 +1,13 @@
 import math
 import typing
 
-import flash_attn
-import flash_attn.layers.rotary
+try:
+  import flash_attn
+  import flash_attn.layers.rotary
+  _FLASH_ATTN_AVAILABLE = True
+except ImportError:
+  flash_attn = None
+  _FLASH_ATTN_AVAILABLE = False
 import huggingface_hub
 import omegaconf
 import torch
@@ -139,7 +144,20 @@ def rotate_half(x):
 def apply_rotary_pos_emb(qkv, cos, sin):
   cos = cos[0,:,0,0,:cos.shape[-1]//2]
   sin = sin[0,:,0,0,:sin.shape[-1]//2]
-  return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
+  if _FLASH_ATTN_AVAILABLE:
+    return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
+  # PyTorch fallback uses the same non-interleaved half-rotation convention.
+  rotary_half = cos.shape[-1]
+  cos = cos[None, :, None, :]
+  sin = sin[None, :, None, :]
+  output = qkv.clone()
+  for qk_index in (0, 1):
+    values = qkv[:, :, qk_index]
+    first = values[..., :rotary_half]
+    second = values[..., rotary_half:2 * rotary_half]
+    output[:, :, qk_index, ..., :rotary_half] = first * cos - second * sin
+    output[:, :, qk_index, ..., rotary_half:2 * rotary_half] = first * sin + second * cos
+  return output
 
 
 # function overload
@@ -268,7 +286,7 @@ class DDiTBlock(nn.Module):
       return bias_dropout_add_scale_fused_inference
 
 
-  def forward(self, x, rotary_cos_sin, c, seqlens=None):
+  def forward(self, x, rotary_cos_sin, c, seqlens=None, sequence_mask=None):
     batch_size, seq_len = x.shape[0], x.shape[1]
 
     bias_dropout_scale_fn = self._get_bias_dropout_scale()
@@ -289,17 +307,32 @@ class DDiTBlock(nn.Module):
       cos, sin = rotary_cos_sin
       qkv = apply_rotary_pos_emb(
         qkv, cos.to(qkv.dtype), sin.to(qkv.dtype))
-    qkv = rearrange(qkv, 'b s ... -> (b s) ...')
-    if seqlens is None:
-      cu_seqlens = torch.arange(
-        0, (batch_size + 1) * seq_len, step=seq_len,
-        dtype=torch.int32, device=qkv.device)
+    use_flash = _FLASH_ATTN_AVAILABLE and (
+      sequence_mask is None or bool(sequence_mask.all()))
+    if use_flash:
+      packed_qkv = rearrange(qkv, 'b s ... -> (b s) ...')
+      if seqlens is None:
+        cu_seqlens = torch.arange(
+          0, (batch_size + 1) * seq_len, step=seq_len,
+          dtype=torch.int32, device=packed_qkv.device)
+      else:
+        cu_seqlens = seqlens.cumsum(-1)
+      x = flash_attn.flash_attn_interface.flash_attn_varlen_qkvpacked_func(
+        packed_qkv, cu_seqlens, seq_len, 0., causal=False)
+      x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
     else:
-      cu_seqlens = seqlens.cumsum(-1)
-    x = flash_attn.flash_attn_interface.flash_attn_varlen_qkvpacked_func(
-      qkv, cu_seqlens, seq_len, 0., causal=False)
-    
-    x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
+      if seqlens is not None:
+        raise ValueError("Variable-length packed attention requires flash-attn")
+      q, k, v = (rearrange(qkv[:, :, index], 'b s h d -> b h s d')
+                 for index in range(3))
+      sdpa_mask = (
+        sequence_mask[:, None, None, :].to(torch.bool)
+        if sequence_mask is not None else None)
+      x = F.scaled_dot_product_attention(
+        q, k, v, attn_mask=sdpa_mask,
+        dropout_p=self.dropout if self.training else 0.0,
+        is_causal=False)
+      x = rearrange(x, 'b h s d -> b s (h d)')
 
     x = bias_dropout_scale_fn(self.attn_out(x),
                               None,
@@ -325,13 +358,31 @@ class EmbeddingLayer(nn.Module):
     # weight_path = f'/model/tteng/GPC/datasets_v1/BundleConstruction/snapshots/cd4ca80e829c1a520f5ccdb228177b99f6caef1f/{config["dataset"]}/{config["feature_type"]}.pt'
     # weight = torch.load(weight_path)
     # # else:
-    # Use project relative path instead of hardcoded /workspace/datasets
-    import os
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    weight_path = os.path.join(project_root, "datasets", config["dataset"], f'{config["feature_type"]}_weight.npy')   
+    # Initialize RVQ token embeddings from the explicit codebook artifact.
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parents[3]
+    configured_root = config.get("data_root", None)
+    data_root = Path(configured_root).expanduser() if configured_root else repo_root / "data" / "dataset"
+    preferred = data_root / "rvq_codebook_weights.npy"
+    legacy = data_root / f'{config["feature_type"]}_weight.npy'
+    weight_path = preferred if preferred.is_file() else legacy
+    if not weight_path.is_file():
+      raise FileNotFoundError(
+        "Missing RVQ codebook weights. Expected "
+        f"{preferred} (preferred) or {legacy} (legacy name).")
     weight = torch.from_numpy(
-      np.load(weight_path, allow_pickle=True).astype(np.float32))
-    self.embedding.data[1:weight.shape[0]+1] = weight
+      np.load(weight_path, allow_pickle=False).astype(np.float32))
+    expected_rows = int(config['rq_n_codebooks']) * int(config['rq_codebook_size'])
+    feature_dim = int(config.model.get('context_dim', 64))
+    if tuple(weight.shape) != (expected_rows, feature_dim):
+      raise ValueError(
+        f"RVQ codebook weights must have shape {(expected_rows, feature_dim)}, "
+        f"got {tuple(weight.shape)}")
+    if dim < feature_dim:
+      raise ValueError(f"Model hidden_size={dim} cannot hold {feature_dim}-D CLHE weights")
+    # Codebook initialization occupies the CLHE subspace. Remaining dimensions
+    # keep their normal random initialization and are trainable.
+    self.embedding.data[1:weight.shape[0]+1, :feature_dim] = weight
 
   def forward(self, x):
     return self.embedding[x]
@@ -371,6 +422,13 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     self.vocab_embed = EmbeddingLayer(config.model.hidden_size,
                                       vocab_size,config)
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
+    # Playlist structure is a first-class condition, not reconstructed from a
+    # sparse integer item ID.  Zero biases make zero-valued conditions neutral.
+    context_dim = int(config.model.get('context_dim', 64))
+    self.context_dim = context_dim
+    self.mu_c_map = nn.Linear(context_dim, config.model.cond_dim, bias=False)
+    self.sigma_c2_map = nn.Linear(1, config.model.cond_dim, bias=False)
+    self.context_map = nn.Linear(context_dim, config.model.hidden_size, bias=False)
     self.rotary_emb = Rotary(
       config.model.hidden_size // config.model.n_heads)
 
@@ -403,9 +461,22 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     else:
       return  bias_dropout_add_scale_fused_inference
 
-  def forward(self, indices, sigma, context_emb=None):
+  def forward(
+      self, indices, sigma, context_emb=None, mu_c=None, sigma_c2=None,
+      sequence_mask=None):
     x = self.vocab_embed(indices)
     c = F.silu(self.sigma_map(sigma))
+    if mu_c is not None:
+      if mu_c.ndim != 2 or mu_c.shape[-1] != self.context_dim:
+        raise ValueError(
+          f"mu_c must be [B, {self.context_dim}], got {tuple(mu_c.shape)}")
+      c = c + F.silu(self.mu_c_map(mu_c))
+    if sigma_c2 is not None:
+      if sigma_c2.ndim == 1:
+        sigma_c2 = sigma_c2[:, None]
+      if sigma_c2.ndim != 2 or sigma_c2.shape[-1] != 1:
+        raise ValueError(f"sigma_c2 must be [B] or [B, 1], got {tuple(sigma_c2.shape)}")
+      c = c + F.silu(self.sigma_c2_map(sigma_c2))
 
     # CFG prefix token: prepend context embedding (or none_embedding) as position 0
     if self.cfg_enabled:
@@ -413,29 +484,37 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       none_prefix = self.none_embedding.unsqueeze(0).unsqueeze(0).expand(B, 1, -1)  # [B, 1, hidden]
 
       if context_emb is not None:
+        context_emb = self.context_map(context_emb)
         if self.cfg_encoder_enabled:
           # Encoder 模式: context_emb shape [B, n_context, hidden]
+          if context_emb.ndim == 2:
+            context_emb = context_emb[:, None, :]
           emb = self.context_encoder(context_emb)                            # [B, hidden]
-          # CFG dropout: 训练时以 cfg_p_drop 概率混入 none_embedding
-          if self.training:
-            p_drop = getattr(self.config.sampling, 'cfg_p_drop', 0.1)
-            keep = (torch.rand(B, device=emb.device) >= p_drop).float()[:, None]
-            none_emb = self.none_embedding.unsqueeze(0).expand(B, -1)
-            emb = emb * keep + none_emb * (1 - keep)
-          prefix = emb.unsqueeze(1)                                          # [B, 1, hidden]
         else:
-          # Mean-pool 模式: context_emb shape [B, hidden]，dropout 已在 diffusion.py 处理
-          prefix = context_emb.unsqueeze(1)                                  # [B, 1, hidden]
+          # Mean-pool mode accepts either [B, n_context, hidden] or [B, hidden].
+          emb = context_emb.mean(dim=1) if context_emb.ndim == 3 else context_emb
+        if self.training:
+          p_drop = getattr(self.config.sampling, 'cfg_p_drop', 0.1)
+          keep = (torch.rand(B, device=emb.device) >= p_drop).float()[:, None]
+          none_emb = self.none_embedding.unsqueeze(0).expand(B, -1)
+          emb = emb * keep + none_emb * (1 - keep)
+        prefix = emb.unsqueeze(1)                                            # [B, 1, hidden]
       else:
         prefix = none_prefix
 
       x = torch.cat([prefix, x], dim=1)                                     # [B, L+1, hidden]
+      if sequence_mask is not None:
+        prefix_mask = torch.ones(
+          (sequence_mask.shape[0], 1), dtype=torch.bool,
+          device=sequence_mask.device)
+        sequence_mask = torch.cat([prefix_mask, sequence_mask.bool()], dim=1)
 
     rotary_cos_sin = self.rotary_emb(x)
 
     with torch.cuda.amp.autocast(dtype=torch.bfloat16):
       for i in range(len(self.blocks)):
-        x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
+        x = self.blocks[i](
+          x, rotary_cos_sin, c, seqlens=None, sequence_mask=sequence_mask)
       x = self.output_layer(x, c)
 
     if self.cfg_enabled:

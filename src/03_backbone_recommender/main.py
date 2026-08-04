@@ -227,6 +227,8 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
     for batch in tqdm(test_ds, desc="Evaluating", ncols=100):
       input_ids = batch['input_ids']  # 输入的bundle前半部分
       labels = batch.get('labels')  # 标签是bundle的后半部分
+      if labels is None:
+        raise ValueError("rec_eval requires tokenizer-provided ground-truth labels")
 
       # CFG: extract context_emb if guidance is enabled
       cfg_enabled = getattr(config.sampling, 'cfg_enabled', False)
@@ -235,45 +237,26 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
         context_emb = batch.get('context_emb', None)
         if context_emb is not None:
           context_emb = context_emb.to(next(model.parameters()).device).float()
+      mu_c = batch.get('mu_c', None)
+      sigma_c2 = batch.get('sigma_c2', None)
+      if mu_c is not None:
+        mu_c = mu_c.to(next(model.parameters()).device).float()
+      if sigma_c2 is not None:
+        sigma_c2 = sigma_c2.to(next(model.parameters()).device).float()
 
-      # 设置生成参数
-      # stride_length应该根据实际需要生成的长度计算
-      # labels是test_gt=True格式（无BOI）：[BOS, d0,d1,d2,d3, ..., EOS]
-      # 但生成时需要BOI格式：[BOS, BOI,d0,d1,d2,d3, ..., EOS]
-      # 所以需要转换：labels长度 + (num_items * 1) 因为每个item多一个BOI
-      # 注意：labels的长度已经由tokenizer根据predict_num_items/predict_ratio/default(0.5)决定
-
-      # 动态计算：去掉BOS和EOS
-      # labels中每个item = n_digit个RVQ codes + 1个conflict digit
-      # 3 codebooks: 4 tokens/item (d0,d1,d2,conflict), 4 codebooks: 5 tokens/item (d0,d1,d2,d3,conflict)
-      tokens_per_item_in_labels = tokenizer.n_digit + 1  # +1 for conflict digit
-      num_items = (labels.shape[1] - 2) // tokens_per_item_in_labels
-
-      # stride_length = BOS + (num_items × tokens_per_item) + EOS
-      # tokens_per_item = BOI + n_digit个RVQ codes + 1个conflict = n_digit + 2
-      # 3 codebooks: 5 tokens/item, 4 codebooks: 6 tokens/item
-      tokens_per_item = tokenizer.n_digit + 2
-      stride_length = 1 + num_items * tokens_per_item + 1
-
-      # 确保stride_length符合模式（余数应为2，即BOS+EOS）
-      # 3 codebooks: stride_length % 5 == 2, 4 codebooks: stride_length % 6 == 2
-      expected_remainder = 2
-      if stride_length % tokens_per_item != expected_remainder:
-        # 调整到最接近的合法长度
-        stride_length = (stride_length // tokens_per_item) * tokens_per_item + expected_remainder
+      # GenPlaylist-v1 test labels are [B, 1, semantic_tokens].  The complete
+      # generation is always [BOS, one 13-token item, EOS].
+      if labels.ndim != 3 or labels.shape[1] != 1:
+        raise ValueError(
+            f"rec_eval expects exactly one next-item label, got {tuple(labels.shape)}")
+      num_items = 1
+      tokens_per_item = tokenizer.tokens_per_item
+      stride_length = 2 + tokens_per_item
 
       # DEBUG: 只在第一个batch打印配置信息
       if len(all_results) == 0:
         print(f"\n[Rec Eval Config]")
-        # 打印预测配置
-        predict_num_items = config.eval.get('predict_num_items', None) if hasattr(config, 'eval') else None
-        predict_ratio = config.eval.get('predict_ratio', None) if hasattr(config, 'eval') else None
-        if predict_num_items is not None:
-            print(f"  Prediction mode: predict_num_items = {predict_num_items} (fixed item count)")
-        elif predict_ratio is not None:
-            print(f"  Prediction mode: predict_ratio = {predict_ratio} (ratio of total)")
-        else:
-            print(f"  Prediction mode: default (0.5, predicting half)")
+        print("  Prediction mode: fixed next-one-item")
         print(f"  labels.shape: {labels.shape}")
         print(f"  labels[0, :]: {labels[0, :].tolist()}")
         print(f"  input_ids.shape: {input_ids.shape}")
@@ -281,27 +264,25 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
         print(f"  num_items to generate: {num_items}")
         print(f"  tokens_per_item: {tokens_per_item} (BOI + {tokenizer.n_digit} RVQ digits + 1 conflict)")
         print(f"  calculated stride_length: {stride_length}")
-        print(f"  stride_length % {tokens_per_item} = {stride_length % tokens_per_item} (should be {expected_remainder})")
 
 
-      num_strides = 1  # 生成步数
       max_k = max(config['evaluator']['topk'])  # 取topk中的最大值（例如topk=[10,20,50]则max_k=50）
-      # 为每个输入生成max_k个候选bundle
-      text_samples = torch.zeros((input_ids.shape[0], max_k, stride_length*num_strides), dtype=torch.long)
+      # Draw max_k alternatives for the same single next-item slot.
+      text_samples = torch.zeros(
+          (input_ids.shape[0], max_k, stride_length), dtype=torch.long)
 
-      # 对每个输入生成max_k个不同的候选bundle
+      # Each draw starts from a full-MASK payload; no next block is appended.
       for i in range(max_k):
-        # 使用半自回归采样生成bundle
-        _, intermediate_samples, _ = model.restore_model_and_semi_ar_sample(
-            input_ids=input_ids,  # 给定的前半部分作为条件
-            stride_length=stride_length,
-            num_strides=num_strides,
-            dt=1 / config.sampling.steps,
+        generated_next_items = model.restore_model_and_sample_next_item(
+            input_ids=input_ids,
+            num_steps=config.sampling.steps,
             context_emb=context_emb,  # CFG context embedding (None if cfg_enabled=False)
+            mu_c=mu_c,
+            sigma_c2=sigma_c2,
+            sequence_mask=batch.get('sequence_mask'),
         )
 
-        gen_seq = torch.tensor(intermediate_samples[-1])  # 获取生成的序列
-        text_samples[:, i, :] = gen_seq  # 保存第i个候选
+        text_samples[:, i, :] = generated_next_items.detach().cpu()
 
       # 计算该批次的推荐指标
       result = evaluator.calculate_metrics(text_samples, labels)
@@ -598,5 +579,3 @@ if __name__ == '__main__':
   # Python脚本入口点
   # 执行main函数，Hydra会自动解析命令行参数和配置文件
   main()
-
-

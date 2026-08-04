@@ -6,9 +6,9 @@ Run from project root:
 
 import sys
 import os
-#sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-sys.path.insert(0, '/home/wjzhang/tt_workspace/model/GenPlaylist/src/04_synthesis')
-sys.path.insert(0, '/home/wjzhang/tt_workspace/model/GenPlaylist/src/00_data_schema')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "00_data_schema"))
 import numpy as np
 from schema import (
     CatalogItem, GeneratedItem, ContextPrefix,
@@ -96,7 +96,7 @@ mock_generated = GeneratedItem(
     z_hat_emb=np.random.randn(CLHE_EMB_DIM).astype(np.float32),
     mu_c_emb=np.random.randn(CLHE_EMB_DIM).astype(np.float32),
     sigma_c2=0.3,
-    cue_ids=[],
+    cue_ids=list(range(8)),
     sample_idx=0,
     context_prefix=ContextPrefix(
         item_ids=["0", "1", "2"],
@@ -112,14 +112,29 @@ print("GeneratedItem validation passed.")
 # 3. Run verbalization
 # ---------------------------------------------------------------------------
 
-print("\nRunning verbalization (2 Qwen API calls)...\n")
+print("\nRunning verbalization with a deterministic test LLM...\n")
+
+captured_prompts = []
+
+def fake_llm(prompt, system=""):
+    captured_prompts.append(prompt)
+    if "style analyst" in system:
+        return "indie pop, melancholic, 95 BPM, guitar, D minor, English"
+    return "[verse]\nNeon over quiet streets\n\n[chorus]\nWe find our way"
 
 result = verbalize(
     generated=mock_generated,
     catalog_embs=catalog_embs,
     catalog_metadata=catalog_metadata,
-    k=3
+    k=3,
+    llm_call=fake_llm,
 )
+
+assert len(captured_prompts) == 2
+for cue_id in range(8):
+    cue_term = f"cue_{cue_id}"
+    assert cue_term in captured_prompts[0]
+    assert cue_term in captured_prompts[1]
 
 # ---------------------------------------------------------------------------
 # 4. Print results

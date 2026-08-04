@@ -18,6 +18,7 @@ import transformers
 
 import utils
 from tokenizer import MDLMTokenizer
+from genplaylist_tokenizer import GenPlaylistTokenizer
 
 LOGGER = utils.get_logger(__name__)
 
@@ -374,7 +375,9 @@ def get_dataset(
 
 
 def get_tokenizer(config, dataset):
-  if config.data.tokenizer_name_or_path == 'MDLMTokenizer':
+  if config.data.tokenizer_name_or_path == 'GenPlaylistTokenizer':
+    tokenizer = GenPlaylistTokenizer.from_dataset_config(config, dataset)
+  elif config.data.tokenizer_name_or_path == 'MDLMTokenizer':
     tokenizer = MDLMTokenizer(config, dataset)
   else:
     tokenizer = transformers.AutoTokenizer.from_pretrained(

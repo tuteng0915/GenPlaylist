@@ -8,6 +8,7 @@ Pipeline loaded once as module-level singleton.
 
 import os
 import sys
+import re
 from typing import Optional
 
 # Add VibeMus ace-step to path
@@ -15,23 +16,32 @@ from typing import Optional
     os.path.dirname(__file__), '..', 'reference', 'VibeMus', 'src', 'ace-step'
 ))"""
 
-sys.path.insert(0, '/home/wjzhang/tt_workspace/model/Music/ACE-Step')
+if os.environ.get("ACE_STEP_PATH"):
+    sys.path.insert(0, os.environ["ACE_STEP_PATH"])
 
 # ---------------------------------------------------------------------------
 # Pipeline singleton (loaded once on import)
 # ---------------------------------------------------------------------------
 
-try:
-    from acestep.pipeline_ace_step import ACEStepPipeline
+_pipe = None
+
+
+def _get_pipeline():
+    """Load ACE-Step on first synthesis call, not while importing this module."""
+    global _pipe
+    if _pipe is not None:
+        return _pipe
+    try:
+        from acestep.pipeline_ace_step import ACEStepPipeline
+    except ImportError as exc:
+        raise RuntimeError(
+            "ACE-Step is unavailable. Install it or set ACE_STEP_PATH to its source tree.") from exc
     _pipe = ACEStepPipeline(
-        device_id=0,
-        dtype="bfloat16",
+        device_id=int(os.environ.get("ACE_STEP_DEVICE", "0")),
+        dtype=os.environ.get("ACE_STEP_DTYPE", "bfloat16"),
         torch_compile=False,
     )
-    print("[synthesis] ACEStepPipeline loaded successfully.")
-except ImportError:
-    _pipe = None
-    print("[synthesis] ACEStepPipeline not found — synthesis unavailable.")
+    return _pipe
 
 
 # ---------------------------------------------------------------------------
@@ -70,17 +80,18 @@ def synthesize(
     -------
     str: absolute path to generated .wav file.
     """
-    if _pipe is None:
-        raise RuntimeError(
-            "ACEStepPipeline not available. "
-            "Run from the VibeMus conda env with ace-step installed."
-        )
+    if not music_attributes.strip() or not lyric_draft.strip():
+        raise ValueError("music_attributes and lyric_draft must not be empty")
+    if not 1.0 <= audio_duration <= 600.0:
+        raise ValueError(f"audio_duration must be in [1, 600] seconds, got {audio_duration}")
+
+    pipe = _get_pipeline()
 
     os.makedirs(output_dir, exist_ok=True)
 
     if style_ref_audio_path and os.path.isfile(style_ref_audio_path):
         # Use edit task with acoustic style reference (nearest catalog neighbor)
-        outputs = _pipe(
+        outputs = pipe(
             task='edit',
             src_audio_path=style_ref_audio_path,
             edit_target_prompt=music_attributes,
@@ -89,7 +100,7 @@ def synthesize(
         )
     else:
         # Standard text-to-music generation
-        outputs = _pipe(
+        outputs = pipe(
             prompt=music_attributes,
             lyrics=lyric_draft,
             audio_duration=audio_duration,
@@ -99,8 +110,10 @@ def synthesize(
 
     if filename is not None:
         import shutil
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
+            raise ValueError("filename may contain only letters, digits, dot, underscore, and dash")
         dest = os.path.join(output_dir, filename + ".wav")
-        shutil.move(out_path, dest)
+        shutil.copy2(out_path, dest)
         out_path = dest
 
     return os.path.abspath(out_path)

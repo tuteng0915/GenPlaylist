@@ -2,7 +2,7 @@
 
 For each extraction method:
     extract raw cues -> normalize vocab -> assign N cues/song -> export -> evaluate
-    (N = --num-cues, default CUE_TOKENS=6, the WP-D schema contract)
+    (N = --num-cues, default CUE_TOKENS=8, the WP-D schema contract)
 
 Then writes one comparison report:
     src/02_creative_cues/outputs/runs/<run_id>/comparison_report.md
@@ -367,7 +367,8 @@ def write_reconstruction_report(rows, vocabs, mappings, sample_ids, catalog_by_i
              f"Generated: {stamp} | lyrics-mode: {args.lyrics_mode} | "
              f"Sample: {len(show_ids)} songs | decoder: {cue_clients.CHAT_MODEL}\n",
              "\nEach song shows its real lyrics, then the lyrics an LLM regenerates "
-             "from ONLY the 6 cues + minimal metadata, per method. Closer = the cues "
+             f"from ONLY the {args.num_cues} cues + minimal metadata, per method. "
+             "Closer = the cues "
              "carried more of the song's content.\n"]
 
     for iid in show_ids:

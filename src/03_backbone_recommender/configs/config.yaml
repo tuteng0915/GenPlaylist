@@ -33,13 +33,16 @@ sampling:
   # TODO(yair): @subham, why aren't these params under `eval`?
   num_sample_batches: 2  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
   num_sample_log: 2
+  # Legacy unconditional sample_eval controls. Production next-song inference
+  # uses explicit full-mask completion and ignores these three fields.
   semi_ar: False
-  stride_length: 1
+  stride_length: 15
   num_strides: 1
   cfg_enabled: false  # true = CFG prefix token conditioning（需重新训练）
   cfg_encoder: false  # true = 用 Transformer encoder 编码 context（false = mean-pool）
   cfg_p_drop: 0.1     # 训练时 context dropout 概率
   cfg_w: 2.0          # 推理 guidance scale（1.0=仅 conditioned，>1=放大）
+  structure_conditioning: true  # condition AdaLN on playlist centroid + dispersion
 
 training:
   ema: 0.9999
@@ -48,7 +51,7 @@ training:
   sampling_eps: 1e-3
   change_of_variables: False
   # RVQ 层级 loss 权重配置
-  # Token 结构：[BOS, BOI, d0, d1, ..., d(n-1), conflict, BOI, ...]
+  # Token 结构：[BOS, BOI, d0, d1, d2, conflict, c0, ..., c7, BOI, ...]
   # Layer 0 (d0) 决定粗粒度类别，最重要；conflict digit 很少被真正使用，权重最低
   # rvq_weights: 各 RVQ 层的权重列表 [d0, d1, d2, ...]，若长度不足则用最后一个值补充
   # conflict_weight: conflict digit 的权重
@@ -57,6 +60,7 @@ training:
     enabled: false
     rvq_weights: [2.0, 1.5, 1.0]
     conflict_weight: 0.5
+    cue_weight: 1.0
 
 eval:
   checkpoint_path: ''  # Used to evaluate a checkpoint after training.
@@ -66,14 +70,9 @@ eval:
   compute_perplexity_on_sanity: False
   gen_ppl_eval_model_name_or_path: gpt2-large  # gpt2-large, meta-llama/Llama-2-7b-hf
   generate_samples: True
-  # ======= Prediction Control for rec_eval Mode =======
-  # Priority: predict_num_items > predict_ratio > default (0.5)
-  # Examples for a bundle with 10 items:
-  #   - predict_num_items: 2  → input: 8 items, predict: 2 items (fixed count)
-  #   - predict_ratio: 0.3    → input: 7 items, predict: 3 items (30% of total)
-  #   - both null             → input: 5 items, predict: 5 items (default 50%)
-  predict_num_items: null  # If set, predict exactly this many items (e.g., 2, 3). Takes highest priority.
-  predict_ratio: null      # If set, predict this ratio of items (e.g., 0.3, 0.8). Takes second priority.
+  # Frozen evaluation contract: all preceding songs are references; the last
+  # song is the single ground-truth next item.
+  predict_num_items: 1
 
 optim:
   weight_decay: 0
@@ -128,6 +127,14 @@ evaluator:
   allow_duplicate_items: false  # 是否允许预测重复item（false=bundle模式，true=sequence模式） 
 
 dataset: spotify
+# Canonical data/dataset is resolved from the repository root when null.  Set
+# this only when the frozen dataset has intentionally been relocated.
+data_root: null
+catalog_embeddings_path: null
+semantic_tokens_path: null
+codebook_weights_path: null
+item2cues_path: null
+cue_manifest_path: null
 feature_type: clhe
 sent_emb_pca: -1
 seq_len: 30

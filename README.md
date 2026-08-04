@@ -1,4 +1,10 @@
-# GenPlaylist: Reference-Based Personalized Music Generation via Preference-to-Prompt Learning
+# GenPlaylist: Next-Song Generation from Multiple Reference Tracks
+
+GenPlaylist keeps DDBC as its discrete-diffusion backbone. Given an ordered set
+of at least two reference tracks, it predicts exactly one next-item latent,
+verbalizes that latent, and synthesizes one original next song. Inference
+appends `[BOI, MASK×12, EOS]` and jointly denoises that single target payload;
+the legacy DDBC next-block sampler is not used by the production path.
 
 ## Repository Structure
 
@@ -19,7 +25,8 @@ GenPlaylist_Code/
     │
     ├── 03_backbone_recommender/       # WP-D: Core Preference Modeling (mentor)
     │   ├── diffusion.py               # Dispersion-conditioned masked discrete diffusion
-    │   ├── tokenizer.py               # Joint RVQ + Creative Cue tokenization (11-token stride)
+    │   ├── genplaylist_tokenizer.py   # RVQ + eight-cue contract (13-token stride)
+    │   ├── tokenizer.py               # Legacy DISCO tokenizer (migration baseline)
     │   ├── playlist_structure.py      # μ_C and σ²_C preference structure computation
     │   ├── dataset.py / dataloader.py
     │   ├── evaluator.py
@@ -33,7 +40,8 @@ GenPlaylist_Code/
     │   └── app.py                     # Gradio demo + user study UI
     │
     └── pipeline/
-        └── genplaylist.py             # End-to-end coordinator: ContextPrefix → list[SynthesisResult]
+        ├── genplaylist.py             # Reusable WP-A → WP-D → WP-C coordinator
+        └── run.py                     # Preflight / server generation CLI
 ```
 
 ## Data Flow
@@ -57,14 +65,26 @@ User ratings + metric scores
 ## Running the pipeline
 
 ```bash
-# Run end-to-end (once all WPs are connected)
+# Run after configuring artifacts and a newly trained WP-D checkpoint:
+# export GENPLAYLIST_BACKBONE_CKPT='/path/to/genplaylist-v1.ckpt'
 python -c "
 import sys; sys.path.insert(0, 'src')
-from pipeline.genplaylist import generate
-from shared.schema import ContextPrefix
-results = generate(ContextPrefix(item_ids=[42, 17, 83, 5, 11]), n_samples=3)
-print(results[0].audio_path)
+from pipeline import GenPlaylistPipeline
+pipeline = GenPlaylistPipeline.from_environment()
+result = pipeline.generate(
+    ['18996', '48262'],
+    user_instruction='a nocturnal but hopeful transition',
+)
+print(result.audio_path)
 "
+
+# Validate catalog/cue startup artifacts without loading model weights
+python src/pipeline/run.py --preflight-only
+
+# Full server request (DDBC checkpoint + OpenAI + ACE-Step must be configured)
+python src/pipeline/run.py \
+  --references 18996 48262 \
+  --instruction 'a nocturnal but hopeful transition'
 
 # Train backbone only
 cd src/03_backbone_recommender
@@ -77,6 +97,13 @@ python 04_synthesis/app.py
 
 ## Interface Files (shared/)
 
-Each WP should only import from `shared/schema.py` when communicating
+Each WP should import from `shared/schema.py` when communicating
 with another WP.  Direct cross-WP imports are routed through
 `pipeline/genplaylist.py`.
+
+The repository currently lacks the generated per-item CLHE/RVQ artifacts and a
+new trained checkpoint. Missing runtime inputs raise an explicit setup error;
+the demo no longer substitutes random embeddings or candidates.
+
+For the exact server-side conversion, preflight, training, and runtime handoff,
+see [docs/SERVER_MIGRATION.md](docs/SERVER_MIGRATION.md).

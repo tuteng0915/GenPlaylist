@@ -63,16 +63,14 @@ preset, don't reach for a flag.
 
 | Preset | method | rank_by | num_cues | min_df | top_n | lyrics_mode |
 |---|---|---|---|---|---|---|
-| `default` | `llm` | `idf` | 18 | 5 | 100 | `dedup` |
-| `tfidf` | `tfidf` | `idf` | 18 | 5 | 100 | `dedup` |
-| `schema-default-cues` | `llm` | `idf` | **6** | 5 | 100 | `dedup` |
+| `default` | `llm` | `idf` | **8** | 5 | 100 | `dedup` |
+| `tfidf` | `tfidf` | `idf` | **8** | 5 | 100 | `dedup` |
+| `research-18-cues` | `llm` | `idf` | 18 | 5 | 100 | `dedup` |
 
-`default`'s settings reflect what the rank-by / min-df / cue-count comparisons
-in this project concluded — see `METHOD_WRITEUP.md` and the run reports under
-`outputs/runs/`. Note `default` and `tfidf` use **18** cues/song, not the
-WP-D schema contract of 6 (`schema-default-cues` gives you that instead) —
-`item2cues.json` from an 18-cue run needs
-`CueMappingEntry.load_mapping(path, n_cues=18)` to read back.
+`default` is the WP-D-compatible production contract: a 2,048-entry cue
+vocabulary and **8 cues/song**. `tfidf` keeps the same interface as an API-free
+baseline. `research-18-cues` is an ablation only; its manifest is marked
+`wp_d_compatible=false` and it cannot be consumed by the production tokenizer.
 
 Add a new preset in `config.py` (as a `replace(DEFAULT, ...)` entry in
 `PRESETS`) when a setting changes, rather than adding a new CLI flag.
@@ -114,9 +112,9 @@ everywhere else in the pipeline.
 
 - `item_id` : string song ID (`"0"`, `"1"`, ...), matching the catalog's item IDs.
 - value     : list of cue IDs (ints, each `0 <= id < vocab_size`, indexing into
-  `cue_vocab.json`). Length = `num_cues` for *this run* — **18** for the
-  `default`/`tfidf` presets, **6** for `schema-default-cues`. Don't assume a
-  fixed length; check `run_config.json` for the run that produced the file.
+  `cue_vocab.json`). Length = `num_cues` for *this run* — **8** for the
+  `default`/`tfidf` presets and **18** for `research-18-cues`. Consumers should
+  check `cue_manifest.json` before loading an artifact.
 
 ```json
 {"0": [842, 12, 5, 1090, 3, 77, 0, 15, ...], "1": [3, 77, 900, ...]}
@@ -144,8 +142,8 @@ python src/02_creative_cues/run_production.py --limit 200
 # Build with tfidf instead of llm (no API cost)
 python src/02_creative_cues/run_production.py --config tfidf
 
-# Build the WP-D schema-default 6 cues/song instead of 18
-python src/02_creative_cues/run_production.py --config schema-default-cues
+# Build the 18-cue research ablation (not WP-D compatible)
+python src/02_creative_cues/run_production.py --config research-18-cues
 
 # Re-run from scratch, ignoring caches
 python src/02_creative_cues/run_production.py --force
@@ -195,7 +193,7 @@ python src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
 | `--held-out-eval` | off | Build vocab from a train split, score on a disjoint test split (generalization, not in-sample fit) |
 | `--test-frac F` | `0.15` | Fraction held out for `--held-out-eval` |
 | `--split-seed N` | `42` | Seed for the `--held-out-eval` split |
-| `--num-cues N` | `6` (`CUE_TOKENS`) | Cues assigned per song — a non-default value needs a matching `n_cues` to read `item2cues.json` back |
+| `--num-cues N` | `8` (`CUE_TOKENS`) | Cues assigned per song — a non-default value needs a matching `n_cues` to read `item2cues.json` back |
 | `--vocab-size N` | `2048` (`CUE_VOCAB_SIZE`) | Total vocab entries incl. `<unk>` — a non-default value needs a matching `vocab_size` to validate/read `cue_vocab.json`/`item2cues.json` back |
 
 ### Examples

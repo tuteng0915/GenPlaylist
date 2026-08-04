@@ -1,6 +1,6 @@
 """cue_assign.py — WP-B Phase 3: per-song cue assignment (paper §4.2 step 4).
 
-Assigns CUE_TOKENS=6 cues to each song from a normalized vocabulary, using
+Assigns CUE_TOKENS=8 cues to each song from a normalized vocabulary, using
 semantic relevance + diversity regularization (the practical realization of the
 paper's "PMI with diversity regularization that enforces pairwise semantic
 distance"):

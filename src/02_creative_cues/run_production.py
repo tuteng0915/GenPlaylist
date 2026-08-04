@@ -12,7 +12,8 @@ Usage:
     .venv/Scripts/python.exe src/02_creative_cues/run_production.py --force       # bypass caches
 
 Output:
-    outputs/production/<timestamp>/  {cue_vocab.json, item2cues.json, run_config.json,
+    outputs/production/<timestamp>/  {cue_vocab.json, item2cues.json, cue_manifest.json,
+                                       run_config.json,
                                        health_report.md (unless --skip-health-check)}
     outputs/production/latest/       the same files, overwritten each run
 """
@@ -40,6 +41,7 @@ import cue_lyrics               # noqa: E402
 import cue_eval                 # noqa: E402
 import cue_export               # noqa: E402
 import cue_io                   # noqa: E402
+from schema import CUE_TOKENS   # noqa: E402
 
 OUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "production")
 
@@ -77,6 +79,10 @@ def main():
                   f"exactly {cue_config.CUE_VOCAB_SIZE}.")
 
     print(f"[production] preset={args.config} -> {cfg}")
+    if cfg.num_cues != CUE_TOKENS:
+        print(f"[production] WARNING: preset '{args.config}' is an experiment with "
+              f"{cfg.num_cues} cues/item; cue_manifest.json will mark it as "
+              "wp_d_compatible=false.")
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(OUT_ROOT, stamp)

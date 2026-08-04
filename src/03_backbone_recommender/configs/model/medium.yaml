@@ -1,6 +1,7 @@
 name: medium
 type: ddit
 hidden_size: 1024
+context_dim: 64  # frozen CLHE embedding dimension
 cond_dim: 128
 length: 1024
 n_blocks: 24

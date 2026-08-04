@@ -4,7 +4,9 @@
 # 用于启动 TensorBoard 服务，查看训练指标
 
 # 设置 TensorBoard 日志目录
-LOGDIR="/home/sjj/wenhao/DISCO/outputs"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOGDIR="${GENPLAYLIST_TENSORBOARD_DIR:-$WP_ROOT/outputs}"
 
 echo "启动 TensorBoard..."
 echo "日志目录: $LOGDIR"

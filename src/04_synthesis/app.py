@@ -9,23 +9,26 @@ import csv
 import random
 import datetime
 import subprocess
-import numpy as np
+import uuid
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '00_data_schema'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-sys.path.insert(0, '/home/wjzhang/tt_workspace/ImageBind')
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gradio as gr
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DATA_DIR       = '/home/wjzhang/tt_workspace/data/data'
-AUDIO_DIR      = os.path.join(DATA_DIR, 'audio', 'spotify')
-CATALOG_PATH   = os.path.join(DATA_DIR, 'dataset', 'catalog_metadata.json')
-CURATED_DIR    = '/home/wjzhang/tt_workspace/genplaylist-wp4-eval/data/curated'
-OUTPUT_DIR     = '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs/demo'
-LOG_PATH       = '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs/evaluation_log.csv'
+DATA_DIR = Path(os.environ.get("GENPLAYLIST_DATA_DIR", REPO_ROOT / "data"))
+AUDIO_DIR = DATA_DIR / "audio" / "spotify"
+CATALOG_PATH = DATA_DIR / "dataset" / "catalog_metadata.json"
+CURATED_DIR = Path(os.environ.get(
+    "GENPLAYLIST_CURATED_DIR", Path(__file__).resolve().parent / "data" / "curated"))
+OUTPUT_DIR = Path(__file__).resolve().parent / "outputs" / "audio"
+LOG_PATH = Path(__file__).resolve().parent / "outputs" / "evaluation_logs" / "user_study.csv"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 
@@ -33,12 +36,12 @@ os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 # Load catalog
 # ---------------------------------------------------------------------------
 print("[app] Loading catalog...")
-with open(CATALOG_PATH) as f:
+with open(CATALOG_PATH, encoding="utf-8") as f:
     _raw = json.load(f)
 CATALOG = _raw if isinstance(_raw, dict) else {str(i['item_id']): i for i in _raw}
 
 def get_audio_path(item_id):
-    return os.path.join(AUDIO_DIR, f"{item_id}.mp3")
+    return str(AUDIO_DIR / f"{item_id}.mp3")
 
 def get_item_label(item_id):
     item = CATALOG.get(str(item_id), {})
@@ -51,7 +54,7 @@ def get_item_label(item_id):
 # ---------------------------------------------------------------------------
 print("[app] Loading curated playlists...")
 _all_curated = {}
-for fname in os.listdir(CURATED_DIR):
+for fname in os.listdir(CURATED_DIR) if CURATED_DIR.is_dir() else []:
     if fname.endswith('.json'):
         with open(os.path.join(CURATED_DIR, fname)) as f:
             d = json.load(f)
@@ -88,11 +91,13 @@ def label_to_variant(label):
     """Return (pid, variant_data) for a given dropdown label."""
     return VARIANT_MAP.get(label, (None, None))
 
-def get_seed_display_from_label(label):
+def get_reference_display_from_label(label):
     pid, variant = label_to_variant(label)
     if not variant:
         return "No songs found."
     lines = []
+    # ``seed_songs`` is the legacy curated-data field name; semantically these
+    # are now the ordered reference music.
     for s in variant['seed_songs']:
         lines.append(f"• {get_item_label(s['id'])}")
     return "\n".join(lines)
@@ -123,82 +128,46 @@ os.environ['CUDA_VISIBLE_DEVICES'] = str(FREE_GPU)
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-_verb_module  = None
-_synth_module = None
+_pipeline = None
 
 def _load_pipeline():
-    global _verb_module, _synth_module
-    if _verb_module is None:
-        print("[app] Loading verbalization...")
-        import verbalization as v
-        _verb_module = v
-    if _synth_module is None:
-        print("[app] Loading synthesis...")
-        import synthesis as s
-        _synth_module = s
+    global _pipeline
+    if _pipeline is not None:
+        return
+    from pipeline import GenPlaylistPipeline
+
+    dataset_dir = DATA_DIR / "dataset"
+    emb_path = Path(os.environ.get(
+        "GENPLAYLIST_CATALOG_EMBEDDINGS", dataset_dir / "catalog_item_embeddings.npy"))
+    mapping_path = Path(os.environ.get(
+        "GENPLAYLIST_ITEM_ID_TO_ROW", dataset_dir / "item_id_to_row.json"))
+    cue_vocab_path = Path(os.environ.get(
+        "GENPLAYLIST_CUE_VOCAB",
+        SRC_ROOT / "02_creative_cues" / "outputs" / "production" / "latest" / "cue_vocab.json"))
+    if not cue_vocab_path.is_file():
+        raise FileNotFoundError(f"Missing production cue vocabulary: {cue_vocab_path}")
+    _pipeline = GenPlaylistPipeline.from_files(
+        catalog_metadata_path=CATALOG_PATH,
+        catalog_embeddings_path=emb_path,
+        item_id_to_row_path=mapping_path,
+        cue_vocab_path=cue_vocab_path,
+        synthesis_output_dir=str(OUTPUT_DIR),
+    )
 
 def run_pipeline(text_instruction, pid, variant=None):
     _load_pipeline()
-    from schema import CatalogItem, GeneratedItem, ContextPrefix
 
     if variant is None:
         variant = _all_curated.get(str(pid), [{}])[0]
 
-    seed_ids = [str(s['id']) for s in variant['seed_songs']]
-
-    # Build catalog items for kNN
-    catalog_items = []
-    catalog_embs  = []
-    np.random.seed(42)
-    for iid, meta in list(CATALOG.items())[:200]:
-        item = CatalogItem(
-            item_id=str(iid),
-            title=meta.get('title', ''),
-            artist=meta.get('artist', ''),
-            album=meta.get('album', ''),
-            genre=meta.get('genre', ''),
-            mood=meta.get('mood', ''),
-            tempo=meta.get('tempo'),
-            key=meta.get('key'),
-            language=meta.get('language', 'en'),
-            lyric_excerpt=meta.get('lyric_excerpt', '')[:100],
-        )
-        catalog_items.append(item)
-        catalog_embs.append(np.random.randn(64).astype(np.float32))
-    catalog_embs = np.array(catalog_embs)
-
-    generated = GeneratedItem(
-        rvq_codes=(42, 17, 203),
-        conflict_code=5,
-        z_hat_emb=np.random.randn(64).astype(np.float32),
-        mu_c_emb=np.random.randn(64).astype(np.float32),
-        sigma_c2=0.3,
-        cue_ids=[],
-        sample_idx=0,
-        context_prefix=ContextPrefix(
-            item_ids=seed_ids,
-            source='song_only',
-            raw_input=text_instruction
-        )
+    reference_ids = [str(s['id']) for s in variant['seed_songs']]
+    result = _pipeline.generate(
+        reference_ids,
+        reference_count=len(reference_ids),
+        user_instruction=text_instruction,
+        audio_duration=30,
     )
-
-    verb_result = _verb_module.verbalize(
-        generated=generated,
-        catalog_embs=catalog_embs,
-        catalog_metadata=catalog_items,
-        k=5
-    )
-
-    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    audio_path = _synth_module.synthesize(
-        music_attributes=verb_result['music_attributes'],
-        lyric_draft=verb_result['lyric_draft'],
-        audio_duration=30.0,
-        output_dir=OUTPUT_DIR,
-        filename=f"generated_{pid}_{ts}"
-    )
-
-    return verb_result['music_attributes'], verb_result['lyric_draft'], audio_path
+    return result.music_attributes, result.lyric_draft, result.audio_path
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -208,7 +177,7 @@ def log_rating(playlist_id, song_a_path, song_b_path, song_a_is_generated,
                preference, listening_freq, musical_training, notes):
     row = {
         'timestamp': datetime.datetime.now().isoformat(),
-        'session_id': random.randint(10000, 99999),
+        'session_id': uuid.uuid4().hex,
         'playlist_id': playlist_id,
         'song_a_path': os.path.basename(song_a_path) if song_a_path else '',
         'song_b_path': os.path.basename(song_b_path) if song_b_path else '',
@@ -224,23 +193,33 @@ def log_rating(playlist_id, song_a_path, song_b_path, song_a_is_generated,
         'musical_training': musical_training,
         'notes': notes,
     }
-    file_exists = os.path.isfile(LOG_PATH)
-    with open(LOG_PATH, 'a', newline='') as f:
+    with open(LOG_PATH, 'a+', newline='', encoding="utf-8") as f:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            pass  # Windows deployments should replace CSV with a transactional store.
+        f.seek(0, os.SEEK_END)
+        file_exists = f.tell() > 0
         writer = csv.DictWriter(f, fieldnames=row.keys())
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+        f.flush()
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (ImportError, NameError):
+            pass
     return row
 
 # ---------------------------------------------------------------------------
-# UI state for user study
+# UI state for user study (stored per Gradio session; never module-global)
 # ---------------------------------------------------------------------------
-_study_state = {}
-# Replace update_seed_display:
-def update_seed_display(label):
+# Update the displayed ordered reference set.
+def update_reference_display(label):
     if not label:
         return "Select a playlist to see its songs."
-    return get_seed_display_from_label(label)
+    return get_reference_display_from_label(label)
 
 # Replace demo_generate:
 def demo_generate(playlist_label, text_instruction):
@@ -250,9 +229,8 @@ def demo_generate(playlist_label, text_instruction):
     if not pid or not variant:
         return None, "Playlist not found.", ""
     try:
-        seed_ids = [s['id'] for s in variant['seed_songs']]
         attributes, lyrics, audio_path = run_pipeline(
-            text_instruction=text_instruction or "a song that fits this playlist",
+            text_instruction=text_instruction or "one next song that fits these references",
             pid=pid,
             variant=variant
         )
@@ -264,35 +242,36 @@ def demo_generate(playlist_label, text_instruction):
 # Replace load_study_pair:
 def load_study_pair(playlist_label):
     if not playlist_label:
-        return None, None, "*Select a playlist to begin.*", "", ""
+        return None, None, "*Select a playlist to begin.*", "", "", {}
     
     pid, variant = label_to_variant(playlist_label)
     if not pid or not variant:
-        return None, None, "Playlist not found.", "", ""
+        return None, None, "Playlist not found.", "", "", {}
 
-    seed_ids = [s['id'] for s in variant['seed_songs']]
-    seed_labels = "\n".join([f"• {get_item_label(sid)}" for sid in seed_ids])
+    reference_ids = [s['id'] for s in variant['seed_songs']]
+    reference_labels = "\n".join(
+        [f"• {get_item_label(item_id)}" for item_id in reference_ids])
 
-    # Ground truth: first valid audio file
-    gt_path = None
-    for s in variant['ground_truth_songs']:
-        p = get_audio_path(s['id'])
-        if os.path.exists(p) and os.path.getsize(p) > 0:
-            gt_path = p
-            break
-
-    if not gt_path:
-        return None, None, "⚠️ No ground truth audio found for this playlist.", seed_labels, ""
+    # Next-one contract: compare only with the immediate held-out next song.
+    ground_truth = variant.get('ground_truth_songs', [])
+    if not ground_truth:
+        return None, None, "⚠️ This example has no ground-truth next song.", reference_labels, "", {}
+    gt_path = get_audio_path(ground_truth[0]['id'])
+    if not os.path.exists(gt_path) or os.path.getsize(gt_path) <= 0:
+        return None, None, (
+            "⚠️ The immediate ground-truth next-song audio is missing; "
+            "this example cannot be substituted with a later song."
+        ), reference_labels, "", {}
 
     # Generate anonymously — user never sees this happening
     try:
         _, _, gen_path = run_pipeline(
-            text_instruction="a song that fits this playlist",
+            text_instruction="one next song that fits these references",
             pid=str(pid),
             variant=variant
         )
     except Exception as e:
-        return None, None, f"⚠️ Generation failed: {e}", seed_labels, ""
+        return None, None, f"⚠️ Generation failed: {e}", reference_labels, "", {}
 
     # Randomize A/B so user doesn't know which is generated
     gen_is_a = random.random() > 0.5
@@ -305,38 +284,39 @@ def load_study_pair(playlist_label):
     shutil.copy(path_a, tmp_a)
     shutil.copy(path_b, tmp_b)
 
-    _study_state.update({
+    study_state = {
         'playlist_id': pid,
         'variant_id': variant.get('variant_id', ''),
         'path_a': path_a,   # keep original paths for logging
         'path_b': path_b,
         'gen_is_a': gen_is_a,
-    })
+    }
 
     context = f"""
 **🎵 Your task:** You are a music listener who enjoys this kind of playlist.
 You are looking for the **next song** to add to it.
 
-**The playlist contains these songs:**
-{seed_labels}
+**Reference music (in order):**
+{reference_labels}
 
 Two candidate songs have been prepared for you.
 Listen to both Song A and Song B, then rate them.
 The songs are in **random order** — you will not be told which is AI-generated and which is real until after you submit.
     """
-    return tmp_a, tmp_b, context, seed_labels, "✅ Songs loaded. Please listen to both before rating."
+    return (tmp_a, tmp_b, context, reference_labels,
+            "✅ Songs loaded. Please listen to both before rating.", study_state)
 
 
-def submit_rating(fit_a, fit_b, quality_a, quality_b, novelty_a, novelty_b,
+def submit_rating(study_state, fit_a, fit_b, quality_a, quality_b, novelty_a, novelty_b,
                   preference, listening_freq, musical_training, notes):
-    if not _study_state:
+    if not study_state:
         return "⚠️ Please load a playlist pair first."
     try:
         row = log_rating(
-            playlist_id=_study_state.get('playlist_id', ''),
-            song_a_path=_study_state.get('path_a', ''),
-            song_b_path=_study_state.get('path_b', ''),
-            song_a_is_generated=_study_state.get('gen_is_a', False),
+            playlist_id=study_state.get('playlist_id', ''),
+            song_a_path=study_state.get('path_a', ''),
+            song_b_path=study_state.get('path_b', ''),
+            song_a_is_generated=study_state.get('gen_is_a', False),
             fit_a=fit_a, fit_b=fit_b,
             quality_a=quality_a, quality_b=quality_b,
             novelty_a=novelty_a, novelty_b=novelty_b,
@@ -346,7 +326,7 @@ def submit_rating(fit_a, fit_b, quality_a, quality_b, novelty_a, novelty_b,
             notes=notes,
         )
         # Reveal which was generated after submission
-        gen_was = "Song A" if _study_state.get('gen_is_a') else "Song B"
+        gen_was = "Song A" if study_state.get('gen_is_a') else "Song B"
         return (
             f"✅ Thank you! Your rating has been recorded.\n\n"
             f"📊 Reveal: The AI-generated song was **{gen_was}**.\n\n"
@@ -365,10 +345,12 @@ with gr.Blocks(
     css="footer { display: none !important; }",
 ) as demo:
 
+    study_state = gr.State({})
+
     gr.Markdown("""
     # 🎵 GenPlaylist
-    ### AI-Powered Personalized Playlist Continuation
-    *Tell us what kind of music you like, and we'll generate the next song for your playlist.*
+    ### Reference-Conditioned Next-Song Generation
+    *Give us multiple reference songs, and we'll generate exactly one song to play next.*
     """)
 
     with gr.Tabs():
@@ -378,7 +360,7 @@ with gr.Blocks(
 
             gr.Markdown("""
             ### How it works
-            1. **Select a reference playlist** — this tells the AI what musical style you like
+            1. **Select multiple reference songs** — these define the musical context
             2. **Optionally describe** what kind of song you want
             3. Click **Generate** and the AI will create a new song that fits your playlist
             """)
@@ -405,9 +387,9 @@ with gr.Blocks(
                     )
 
                 with gr.Column(scale=1):
-                    seed_display_gen = gr.Textbox(
-                        label="📋 Songs in this playlist",
-                        info="These are the reference songs the AI will use to understand the style",
+                    reference_display_gen = gr.Textbox(
+                        label="📋 Ordered reference music",
+                        info="The model predicts one song to follow these references",
                         interactive=False,
                         lines=7
                     )
@@ -432,9 +414,9 @@ with gr.Blocks(
                     )
 
             playlist_dropdown_gen.change(
-                fn=update_seed_display,
+                fn=update_reference_display,
                 inputs=[playlist_dropdown_gen],
-                outputs=[seed_display_gen]
+                outputs=[reference_display_gen]
             )
             generate_btn.click(
                 fn=demo_generate,
@@ -450,7 +432,7 @@ with gr.Blocks(
             We are researchers studying AI music generation. In this study, you will listen to
             **two songs** and rate how well each one fits a given playlist.
 
-            One song is AI-generated, the other is a real song — but they are presented in
+            One song is AI-generated, the other is the real held-out next song — they are presented in
             **random order** so you won't know which is which. Please rate them independently
             based on how well they fit the playlist.
 
@@ -541,12 +523,13 @@ with gr.Blocks(
             load_btn.click(
                 fn=load_study_pair,
                 inputs=[playlist_dropdown_study],
-                outputs=[audio_a, audio_b, context_display, gr.Textbox(visible=False), load_status]
+                outputs=[audio_a, audio_b, context_display, gr.Textbox(visible=False),
+                         load_status, study_state]
             )
 
             submit_btn.click(
                 fn=submit_rating,
-                inputs=[fit_a, fit_b, quality_a, quality_b,
+                inputs=[study_state, fit_a, fit_b, quality_a, quality_b,
                         novelty_a, novelty_b,
                         preference, listening_freq, musical_training, notes],
                 outputs=[submit_status]
@@ -561,10 +544,5 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         show_error=True,
-        allowed_paths=[
-    '/home/wjzhang/tt_workspace/data/data/audio/spotify',
-    '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs',
-    '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs/demo',
-    '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs/test',
-],
+        allowed_paths=[str(AUDIO_DIR), str(OUTPUT_DIR)],
     )

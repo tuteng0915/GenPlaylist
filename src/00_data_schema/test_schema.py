@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(__file__))  # .../src/00_data_schema/
 
 import numpy as np
 from schema import (
-    RQ_N_CODEBOOKS, RQ_CODEBOOK_SIZE, CUE_VOCAB_SIZE, CLHE_EMB_DIM,
+    RQ_N_CODEBOOKS, RQ_CODEBOOK_SIZE, CUE_TOKENS, CUE_VOCAB_SIZE, CLHE_EMB_DIM,
+    TOKEN_LAYOUT,
     CatalogItem, ContextPrefix, CueMappingEntry, GeneratedItem, SynthesisResult,
 )
 
@@ -51,7 +52,7 @@ def test_catalog_item_from_metadata_string():
         "0", "'Hegira' by Within The Ruins in album'Phenomena'"
     )
     assert item.item_id == "0"
-    assert item.feature_index == 0      # auto-assigned from item_id
+    assert item.feature_index == -1     # assigned only through item_id_to_row.json
     assert item.title  == "Hegira"
     assert item.artist == "Within The Ruins"
     assert item.album  == "Phenomena"
@@ -78,7 +79,7 @@ def test_context_prefix_invalid():
     try:
         ContextPrefix(item_ids=[]).validate()
         assert False, "empty item_ids should fail"
-    except AssertionError:
+    except ValueError:
         pass
 
     try:
@@ -87,12 +88,18 @@ def test_context_prefix_invalid():
             items=[CatalogItem(item_id="1")],  # length mismatch
         ).validate()
         assert False
-    except AssertionError:
+    except ValueError:
+        pass
+
+    try:
+        ContextPrefix(item_ids=["1", "1"], source="song_only").validate()
+        assert False, "duplicate IDs should fail"
+    except ValueError:
         pass
 
 
 def test_cue_mapping_entry_valid():
-    entry = CueMappingEntry(item_id="99", cue_ids=[0, 100, 200, 300, 400, 500])
+    entry = CueMappingEntry(item_id="99", cue_ids=list(range(CUE_TOKENS)))
     entry.validate()
 
 
@@ -100,17 +107,19 @@ def test_cue_mapping_entry_invalid():
     try:
         CueMappingEntry(item_id="1", cue_ids=[0, 1, 2]).validate()  # too few
         assert False
-    except AssertionError:
+    except ValueError:
         pass
     try:
-        CueMappingEntry(item_id="1", cue_ids=[0, 1, 2, 3, 4, CUE_VOCAB_SIZE]).validate()  # out of range
+        CueMappingEntry(
+            item_id="1", cue_ids=[*range(CUE_TOKENS - 1), CUE_VOCAB_SIZE]
+        ).validate()  # out of range
         assert False
-    except AssertionError:
+    except ValueError:
         pass
 
 
-def test_generated_item_current_backbone():
-    """Current backbone: 3 RVQ codes, codebook size 256, no cue_ids."""
+def test_generated_item_legacy_without_cues():
+    """Legacy callers can explicitly allow missing cues during migration."""
     d = CLHE_EMB_DIM  # 64, confirmed from clhe_weight.npy shape (768, 64)
     item = GeneratedItem(
         rvq_codes=(0, 128, 255),   # 3 codes, each in [0, 256)
@@ -121,12 +130,12 @@ def test_generated_item_current_backbone():
         cue_ids=[],                # empty = not yet extended
         sample_idx=0,
     )
-    item.validate()
+    item.validate(allow_missing_cues=True)
     assert item.cue_ids == []
 
 
 def test_generated_item_with_cues():
-    """Future state: 3 RVQ + 6 creative cues (after WP-B + tokenizer update)."""
+    """Current state: 3 RVQ + 8 creative cues."""
     d = CLHE_EMB_DIM
     item = GeneratedItem(
         rvq_codes=(0, 128, 255),
@@ -134,7 +143,7 @@ def test_generated_item_with_cues():
         z_hat_emb=np.random.randn(d).astype(np.float32),
         mu_c_emb=np.random.randn(d).astype(np.float32),
         sigma_c2=0.8,
-        cue_ids=[10, 20, 30, 40, 50, 60],
+        cue_ids=[10, 20, 30, 40, 50, 60, 70, 80],
         sample_idx=1,
     )
     item.validate()
@@ -152,19 +161,19 @@ def test_generated_item_invalid_codes():
     try:
         GeneratedItem(rvq_codes=(0, 1), **base).validate()  # only 2 instead of 3
         assert False
-    except AssertionError:
+    except ValueError:
         pass
     # Out-of-range code
     try:
         GeneratedItem(rvq_codes=(0, 128, RQ_CODEBOOK_SIZE), **base).validate()
         assert False
-    except AssertionError:
+    except ValueError:
         pass
     # Negative sigma_c2
     try:
         GeneratedItem(rvq_codes=(0, 1, 2), **{**base, "sigma_c2": -1.0}).validate()
         assert False
-    except AssertionError:
+    except ValueError:
         pass
     # Dimension mismatch: mu_c_emb has wrong shape
     try:
@@ -173,8 +182,22 @@ def test_generated_item_invalid_codes():
             **{**base, "mu_c_emb": np.zeros(128)}  # wrong dim (expected 64)
         ).validate()
         assert False
-    except AssertionError:
+    except ValueError:
         pass
+
+
+def test_token_layout():
+    assert TOKEN_LAYOUT.tokens_per_item == 13
+    assert TOKEN_LAYOUT.rvq_token(0, 0) == 1
+    assert TOKEN_LAYOUT.rvq_token(2, 255) == 768
+    assert TOKEN_LAYOUT.conflict_token(0) == 769
+    assert TOKEN_LAYOUT.conflict_token(73) == 842
+    assert TOKEN_LAYOUT.boi_token == 843
+    assert TOKEN_LAYOUT.eos_token == 844
+    assert TOKEN_LAYOUT.cue_token(0) == 845
+    assert TOKEN_LAYOUT.cue_token(2047) == 2892
+    assert TOKEN_LAYOUT.mask_token == 2893
+    assert TOKEN_LAYOUT.runtime_vocab_size == 2894
 
 
 def test_synthesis_result_no_audio():
@@ -186,7 +209,7 @@ def test_synthesis_result_no_audio():
     try:
         result.validate()
         assert False, "should fail — audio file does not exist"
-    except AssertionError:
+    except ValueError:
         pass
 
 
@@ -199,9 +222,10 @@ if __name__ == "__main__":
         test_context_prefix_invalid,
         test_cue_mapping_entry_valid,
         test_cue_mapping_entry_invalid,
-        test_generated_item_current_backbone,
+        test_generated_item_legacy_without_cues,
         test_generated_item_with_cues,
         test_generated_item_invalid_codes,
+        test_token_layout,
         test_synthesis_result_no_audio,
     ]
     passed = 0

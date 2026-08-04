@@ -22,12 +22,8 @@ Expected output (no GPU, no API key required):
     [mock_run] === GenPlaylist end-to-end mock run ===
     [mock_run] catalog : 20 items, emb shape (20, 64)
     [mock_run] context : ['3', '7', '12', '1', '18'] (song_only)
-    [mock_run] running 3 backbone samples ...
-    [verbalization] _call_qwen3 is a stub ...
-    [mock_run] sample 0 | attrs: STUB OUTPUT | audio: .../mock_0.wav
-    [mock_run] sample 1 | attrs: STUB OUTPUT | audio: .../mock_1.wav
-    [mock_run] sample 2 | attrs: STUB OUTPUT | audio: .../mock_2.wav
-    [mock_run] 3/3 SynthesisResult objects passed validate()
+    [mock_run] generating exactly one next song ...
+    [mock_run] 1/1 SynthesisResult object passed validate()
     [mock_run] === PASS ===
 """
 
@@ -98,10 +94,10 @@ def _mock_run_backbone(
     rng = np.random.default_rng(seed=sum(int(x) for x in context_prefix.item_ids))
 
     # Compute real μ_C and σ²_C from context embedding rows
-    seed_rows = [int(iid) for iid in context_prefix.item_ids if iid.isdigit()]
-    seed_embs = catalog_embs[seed_rows]                          # (K, d)
-    mu_c      = seed_embs.mean(axis=0)                          # (d,)
-    diffs     = seed_embs - mu_c                                 # (K, d)
+    reference_rows = [int(iid) for iid in context_prefix.item_ids if iid.isdigit()]
+    reference_embs = catalog_embs[reference_rows]                # (K, d)
+    mu_c      = reference_embs.mean(axis=0)                      # (d,)
+    diffs     = reference_embs - mu_c                            # (K, d)
     sigma_c2  = float(np.mean(np.sum(diffs ** 2, axis=1)))      # scalar
 
     items = []
@@ -120,7 +116,7 @@ def _mock_run_backbone(
             z_hat_emb=z_hat,
             mu_c_emb=mu_c.copy(),
             sigma_c2=sigma_c2,
-            cue_ids=[],
+            cue_ids=list(range(8)),
             sample_idx=s,
             context_prefix=context_prefix,
         ))
@@ -205,8 +201,8 @@ def main():
     synthesis_mod.synthesize = _mock_synthesize  # patch ACE-Step with our mock
 
     # 4. Run backbone mock
-    n_samples = 3
-    print(f"[mock_run] running {n_samples} backbone samples ...")
+    n_samples = 1
+    print("[mock_run] generating exactly one next song ...")
     generated_items = _mock_run_backbone(ctx, n_samples, catalog_embs, catalog_metadata)
 
     # 5. Verbalize + synthesize each candidate
