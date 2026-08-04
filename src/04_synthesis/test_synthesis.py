@@ -4,7 +4,7 @@ Run from project root (with vibemus conda env active):
     python src/test_synthesis.py
 
 This runs the full verbalization -> synthesis chain on mock data.
-Produces one .wav file in outputs/test/.
+Produces one MP3 file in outputs/test/.
 """
 
 import sys

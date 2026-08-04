@@ -7,6 +7,7 @@ Pipeline loaded once as module-level singleton.
 """
 
 import os
+import shutil
 import sys
 from typing import Optional
 
@@ -37,11 +38,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
 def synthesize(
     music_attributes: str,
     lyric_draft: str,
-    audio_duration: float = 30.0,
+    audio_duration: float = 240.0,
     style_ref_audio_path: Optional[str] = None,
     output_dir: str = "outputs",
     filename: Optional[str] = None,
@@ -57,18 +57,19 @@ def synthesize(
         ACE-Step markup lyrics from verbalization.generate_lyrics().
         e.g. "[verse]\\nLine one\\nLine two\\n[chorus]\\n..."
     audio_duration:
-        Target clip length in seconds. Default 30s for fast testing.
+        Target song length in seconds. Defaults to ACE-Step's maximum supported
+        duration of 240 seconds so production callers receive a full song.
     style_ref_audio_path:
         Optional path to nearest-neighbor catalog song for acoustic reference.
         When provided, uses ACE-Step edit task for style transfer.
     output_dir:
-        Directory to write the .wav file.
+        Directory to write the browser-friendly MP3 file.
     filename:
         Output filename without extension. Auto-generated if None.
 
     Returns
     -------
-    str: absolute path to generated .wav file.
+    str: absolute path to generated MP3 file.
     """
     if _pipe is None:
         raise RuntimeError(
@@ -86,6 +87,7 @@ def synthesize(
             edit_target_prompt=music_attributes,
             edit_target_lyrics=lyric_draft,
             audio_duration=audio_duration,
+            format="mp3",
         )
     else:
         # Standard text-to-music generation
@@ -93,14 +95,16 @@ def synthesize(
             prompt=music_attributes,
             lyrics=lyric_draft,
             audio_duration=audio_duration,
+            format="mp3",
         )
 
-    out_path = outputs[0]
-
-    if filename is not None:
-        import shutil
-        dest = os.path.join(output_dir, filename + ".wav")
-        shutil.move(out_path, dest)
-        out_path = dest
+    ace_output_path = outputs[0]
+    out_path = (
+        os.path.join(output_dir, filename + ".mp3")
+        if filename is not None
+        else ace_output_path
+    )
+    if os.path.abspath(ace_output_path) != os.path.abspath(out_path):
+        shutil.move(ace_output_path, out_path)
 
     return os.path.abspath(out_path)

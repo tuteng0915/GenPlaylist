@@ -356,7 +356,7 @@ class SynthesisResult:
 
     Fields
     ------
-    audio_path      : absolute path to generated .wav file.
+    audio_path      : absolute path to a generated audio file.
     music_attributes: comma-separated ACE-Step style tags.
     lyric_draft     : ACE-Step markup lyrics ([verse]/[chorus]/[bridge]).
     neighbors       : kNN neighbors of z_hat_emb (verbalization source).

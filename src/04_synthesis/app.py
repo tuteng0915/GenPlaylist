@@ -26,6 +26,7 @@ CATALOG_PATH   = os.path.join(DATA_DIR, 'dataset', 'catalog_metadata.json')
 CURATED_DIR    = '/home/wjzhang/tt_workspace/genplaylist-wp4-eval/data/curated'
 OUTPUT_DIR     = '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs/demo'
 LOG_PATH       = '/home/wjzhang/tt_workspace/model/GenPlaylist/outputs/evaluation_log.csv'
+FULL_SONG_DURATION_SECONDS = 240.0
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 
@@ -193,7 +194,7 @@ def run_pipeline(text_instruction, pid, variant=None):
     audio_path = _synth_module.synthesize(
         music_attributes=verb_result['music_attributes'],
         lyric_draft=verb_result['lyric_draft'],
-        audio_duration=30.0,
+        audio_duration=FULL_SONG_DURATION_SECONDS,
         output_dir=OUTPUT_DIR,
         filename=f"generated_{pid}_{ts}"
     )

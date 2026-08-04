@@ -112,7 +112,7 @@ def _run_backbone(
 def generate(
     context_prefix: ContextPrefix,
     n_samples: int = 3,
-    audio_duration: int = 30,
+    audio_duration: int = 240,
     k_neighbors: int = 5,
     catalog_embs: np.ndarray | None = None,
     catalog_metadata: list[CatalogItem] | None = None,
@@ -123,7 +123,7 @@ def generate(
     ----------
     context_prefix  : standardized playlist context (from WP-A or directly).
     n_samples       : how many independent candidates to draw.
-    audio_duration  : clip length in seconds for ACE-Step.
+    audio_duration  : song length in seconds for ACE-Step (maximum 240).
     k_neighbors     : kNN neighborhood size for verbalization.
     catalog_embs    : (N, d) CLHE embedding matrix; falls back to module cache.
     catalog_metadata: list[CatalogItem]; falls back to module cache.
