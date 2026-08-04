@@ -98,7 +98,9 @@ class GenPlaylistTokenizer:
             return Path(value).expanduser() if value else default
 
         catalog_items = CatalogItem.load_catalog(str(data_root / "catalog_metadata.json"))
-        mapping = json.loads((data_root / "item_id_to_row.json").read_text(encoding="utf-8"))
+        mapping_path = configured(
+            "item_id_to_row_path", data_root / "item_id_to_row.json")
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
         embeddings_path = configured(
             "catalog_embeddings_path", data_root / "catalog_item_embeddings.npy")
         tokenizer = cls.from_files(
@@ -407,14 +409,33 @@ class GenPlaylistTokenizer:
         return 1 + self.max_items * self.tokens_per_item + 1
 
     def tokenize(self, datasets: dict) -> dict:
-        """Tokenize HF datasets for next-item training (last item is the only target)."""
+        """Tokenize next-one training rows and fixed 15->5 evaluation rows."""
         tokenized = {}
         for split, source in datasets.items():
             usable = source.filter(lambda row: len(row["item_seq"]) >= 3)
 
             def encode_row(row):
                 item_ids = [str(item_id) for item_id in row["item_seq"]]
-                encoded = self.encode_playlist(item_ids, context_items=len(item_ids) - 1)
+                if split == "test":
+                    protocol = self.config.get("protocol", {})
+                    reference_count = int(protocol.get("eval_reference_items", 15))
+                    target_count = int(protocol.get("eval_target_items", 5))
+                    expected_count = reference_count + target_count
+                    if len(item_ids) != expected_count:
+                        raise ValueError(
+                            f"Test rows must contain exactly {expected_count} items for "
+                            f"{reference_count}->{target_count} evaluation, got {len(item_ids)}")
+                    reference_ids = item_ids[:reference_count]
+                    target_ids = item_ids[reference_count:]
+                    # Reuse encode_playlist to compute the context statistics;
+                    # the temporary target is not exposed in test input_ids.
+                    encoded = self.encode_playlist(
+                        [*reference_ids, target_ids[0]], context_items=reference_count)
+                else:
+                    reference_ids = item_ids[:-1]
+                    target_ids = item_ids[-1:]
+                    encoded = self.encode_playlist(
+                        item_ids, context_items=len(reference_ids))
                 result = {
                     "input_ids": encoded.input_ids.tolist(),
                     "sequence_mask": [True] * len(encoded.input_ids),
@@ -428,7 +449,7 @@ class GenPlaylistTokenizer:
                 }
                 if split == "test":
                     context_tokens = [self.bos_token]
-                    for item_id in item_ids[:-1]:
+                    for item_id in reference_ids:
                         context_tokens.extend(self.encode_item(item_id))
                     context_tokens.append(self.eos_token)
                     result["input_ids"] = context_tokens
@@ -437,7 +458,9 @@ class GenPlaylistTokenizer:
                         token not in (self.bos_token, self.boi_token, self.eos_token)
                         for token in context_tokens]
                     result["target_mask"] = [False] * len(context_tokens)
-                    result["labels"] = [self._validated_semantic_tokens(item_ids[-1])]
+                    result["labels"] = [
+                        self._validated_semantic_tokens(item_id)
+                        for item_id in target_ids]
                 return result
 
             tokenized[split] = usable.map(

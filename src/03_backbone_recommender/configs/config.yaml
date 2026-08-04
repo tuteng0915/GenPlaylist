@@ -70,8 +70,8 @@ eval:
   compute_perplexity_on_sanity: False
   gen_ppl_eval_model_name_or_path: gpt2-large  # gpt2-large, meta-llama/Llama-2-7b-hf
   generate_samples: True
-  # Frozen evaluation contract: all preceding songs are references; the last
-  # song is the single ground-truth next item.
+  # Inference is always next-one; rec_eval repeats it according to
+  # protocol.eval_num_samples and matches the draws to five future songs.
   predict_num_items: 1
 
 optim:
@@ -129,12 +129,14 @@ evaluator:
   # 候选集配置（用于rec_eval模式的item检索）
   candidate_multiplier: 99  # 候选集大小 = label_items数量 × multiplier（默认99，总共100倍）
   allow_duplicate_items: false  # 是否允许预测重复item（false=bundle模式，true=sequence模式） 
+  num_samples: ${protocol.eval_num_samples}
 
 dataset: spotify
 # Canonical data/dataset is resolved from the repository root when null.  Set
 # this only when the frozen dataset has intentionally been relocated.
 data_root: null
 catalog_embeddings_path: null
+item_id_to_row_path: null
 semantic_tokens_path: null
 codebook_weights_path: null
 item2cues_path: null
@@ -144,9 +146,17 @@ cue_manifest_path: null
 active_cue_tokens: 8
 feature_type: clhe
 sent_emb_pca: -1
-seq_len: 30
+# Training windows contain at most 15 references plus one next-item target.
+seq_len: 16
 cir: 1
-swap_ratio: 0.4
+swap_ratio: 0.0
+
+protocol:
+  min_reference_items: 2
+  eval_total_items: 20
+  eval_reference_items: 15
+  eval_target_items: 5
+  eval_num_samples: 5
 
 num_proc: 1
 eval_batch_size: 32

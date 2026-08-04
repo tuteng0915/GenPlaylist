@@ -3,7 +3,7 @@
 ## Implemented
 
 - [x] Read `data/dataset/splits/{train,val,test}.txt` and preserve sparse IDs as strings.
-- [x] Keep playlists shorter than `seq_len`; augmentation retains originals.
+- [x] Expand all chronological prefixes into up-to-15-reference -> next-one training rows.
 - [x] Add the 13-token tokenizer with strict semantic/cue artifact checks.
 - [x] Emit context embeddings, `mu_c`, `sigma_c2`, attention mask, and target mask.
 - [x] Decode tokens to a validated `GeneratedItem` and 64-D reconstruction.
@@ -15,7 +15,9 @@
 - [x] Apply the per-position legal-token mask in the shared model forward path.
 - [x] Train with all preceding songs as references and the last song as the only target.
 - [x] Require at least two references and expose a fixed one-item production sampler.
-- [x] Make recommendation evaluation reject multi-item targets.
+- [x] Freeze test rows to 20 songs: 15 references plus five future targets.
+- [x] Draw five independent full-MASK next-one samples from the same context.
+- [x] Score predictions and targets with order-free 5x5 Hungarian matching.
 - [x] Replace production next-block sampling with explicit full-mask completion.
 - [x] Add semantic warm-start loading for the official 1,028-token DDBC Spotify checkpoint.
 - [x] Add extraction of the checkpoint's embedded CLHE/RVQ artifacts for the 5,119-item catalog.

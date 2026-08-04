@@ -10,6 +10,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import cosine_distances
 import matplotlib.pyplot as plt
 
+from many_to_many_metrics import calculate_many_to_many_metrics
+
 class Evaluator:
     def __init__(self, config, tokenizer):
         self.config = config
@@ -45,6 +47,9 @@ class Evaluator:
             self.item_id_to_row = {str(item_id): int(item_id) for item_id in self.id2token}
         self.dataset_dir = dataset_dir
         self.token2id = {tuple(v): k for k, v in self.id2token.items()}
+        self.row_to_item_id = {
+            int(row): str(item_id) for item_id, row in self.item_id_to_row.items()
+        }
 
         # 候选集缓存相关
         self.seed = config.get('seed', 1)
@@ -547,6 +552,101 @@ class Evaluator:
     def count_legal(self,preds):
         return
 
+    def calculate_five_by_five_metrics(self, preds, labels):
+        """Evaluate five independent next-one samples against five future songs."""
+        expected_samples = int(self.config.get('num_samples', 5))
+        if preds.ndim != 4 or preds.shape[2] != 1:
+            raise ValueError(
+                "Many-to-many evaluation expects [batch, samples, 1, semantic_tokens], "
+                f"got {tuple(preds.shape)}")
+        if labels.ndim != 3:
+            raise ValueError(f"Expected [batch, targets, semantic_tokens], got {labels.shape}")
+        if preds.shape[1] != expected_samples or labels.shape[1] != expected_samples:
+            raise ValueError(
+                f"Frozen evaluation requires {expected_samples} samples and targets, got "
+                f"{preds.shape[1]} and {labels.shape[1]}")
+
+        batch_size = preds.shape[0]
+        embedding_dim = int(self.feature.shape[1])
+        prediction_features = np.zeros(
+            (batch_size, expected_samples, embedding_dim), dtype=np.float32)
+        target_features = np.zeros_like(prediction_features)
+        prediction_ids = np.empty((batch_size, expected_samples), dtype=object)
+        target_ids = np.empty_like(prediction_ids)
+        catalog_features = self.feature.detach().cpu().numpy().astype(np.float32)
+        catalog_norms = np.linalg.norm(catalog_features, axis=1)
+
+        from collections import Counter
+        for batch_index in range(batch_size):
+            predicted_token_tuples = []
+            for sample_index in range(expected_samples):
+                token_tuple = tuple(preds[batch_index, sample_index, 0].tolist())
+                predicted_token_tuples.append(token_tuple)
+                raw_feature = np.asarray(
+                    self.tokenizer._token_to_feature(token_tuple), dtype=np.float32)
+                item_id = self.token2id.get(token_tuple)
+                if item_id is not None:
+                    item_id = str(item_id)
+                    self.rvq_direct_hit_count += 1
+                else:
+                    denominator = np.maximum(
+                        np.linalg.norm(raw_feature) * catalog_norms,
+                        np.finfo(np.float32).eps)
+                    similarities = catalog_features @ raw_feature / denominator
+                    row = int(np.argmax(similarities))
+                    item_id = self.row_to_item_id[row]
+                    self.rvq_miss_count += 1
+                selected_row = self.item_id_to_row[item_id]
+                selected_feature = catalog_features[selected_row]
+                selected_denominator = max(
+                    np.linalg.norm(raw_feature) * catalog_norms[selected_row],
+                    np.finfo(np.float32).eps)
+                similarity = float(selected_feature @ raw_feature / selected_denominator)
+                # The recommendation is the retrieved catalog item.  Use its
+                # frozen CLHE embedding consistently for both direct hits and
+                # RVQ misses in the subsequent 5x5 semantic assignment.
+                prediction_features[batch_index, sample_index] = selected_feature
+                prediction_ids[batch_index, sample_index] = item_id
+                self.retrieval_similarities.append(similarity)
+                self.total_predictions += 1
+
+                if self.predicted_rvq_codes is None:
+                    self.predicted_rvq_codes = [[] for _ in range(self.tokenizer.n_digit)]
+                for layer_index in range(self.tokenizer.n_digit):
+                    self.predicted_rvq_codes[layer_index].append(token_tuple[layer_index])
+                self.conflict_digits.append(token_tuple[-1])
+
+            rvq_duplicates = sum(
+                count - 1 for count in Counter(predicted_token_tuples).values()
+                if count > 1)
+            item_duplicates = sum(
+                count - 1 for count in Counter(prediction_ids[batch_index]).values()
+                if count > 1)
+            self.rvq_duplicate_count += rvq_duplicates
+            self.item_duplicate_count += item_duplicates
+            self.samples_with_rvq_dup += int(rvq_duplicates > 0)
+            self.samples_with_item_dup += int(item_duplicates > 0)
+
+            for target_index in range(expected_samples):
+                target_tuple = tuple(labels[batch_index, target_index].tolist())
+                if target_tuple not in self.token2id:
+                    raise ValueError(f"Ground-truth semantic ID is not in catalog: {target_tuple}")
+                target_id = str(self.token2id[target_tuple])
+                target_ids[batch_index, target_index] = target_id
+                target_features[batch_index, target_index] = catalog_features[
+                    self.item_id_to_row[target_id]]
+
+        self.total_samples += batch_size
+        metrics = calculate_many_to_many_metrics(
+            prediction_features, target_features, prediction_ids, target_ids)
+        print("\n[5x5 Evaluation - First Sample]")
+        print(f"  Predicted items: {prediction_ids[0].tolist()}")
+        print(f"  Ground truth:    {target_ids[0].tolist()}")
+        return {
+            name: torch.as_tensor(values, dtype=torch.float32)
+            for name, values in metrics.items()
+        }
+
     def save_candidate_cache(self):
         """
         保存生成的候选集到缓存文件，用于后续不同模型的公平对比。
@@ -941,6 +1041,9 @@ class Evaluator:
         else:
             labels_item = labels[:, 1:-1].reshape(
                 labels.shape[0], -1, tokens_per_item_label)
+
+        if labels_item.shape[1] > 1:
+            return self.calculate_five_by_five_metrics(preds, labels_item)
 
         # Check if labels have duplicate items (for debugging)
         label_tuples = [tuple(labels_item[0, i].tolist()) for i in range(labels_item.shape[1])]

@@ -42,6 +42,52 @@ def make_tokenizer():
         {"18996": 0, "48262": 1, "73001": 2}, weights)
 
 
+def make_twenty_item_tokenizer():
+    item_ids = [str(10000 + index) for index in range(20)]
+    items = [CatalogItem(item_id) for item_id in item_ids]
+    semantic = {
+        item_id: [1 + index, 257 + index, 513 + index, 769 + index]
+        for index, item_id in enumerate(item_ids)
+    }
+    cues = {item_id: list(range(16)) for item_id in item_ids}
+    embeddings = np.stack([
+        np.full(64, float(index), dtype=np.float32)
+        for index in range(20)
+    ])
+    weights = np.arange(768 * 64, dtype=np.float32).reshape(768, 64)
+    tokenizer = GenPlaylistTokenizer(
+        semantic, cues, items, embeddings,
+        {item_id: index for index, item_id in enumerate(item_ids)}, weights)
+    tokenizer.config = {
+        "rq_codebook_size": 256,
+        "protocol": {
+            "eval_reference_items": 15,
+            "eval_target_items": 5,
+        },
+    }
+    return tokenizer, item_ids
+
+
+class FakeRows:
+    """Small subset of the HF Dataset interface used by tokenizer tests."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.column_names = list(rows[0]) if rows else []
+
+    def filter(self, function):
+        return FakeRows([row for row in self.rows if function(row)])
+
+    def map(self, function, **_kwargs):
+        return FakeRows([function(row) for row in self.rows])
+
+    def set_format(self, **_kwargs):
+        return None
+
+    def __getitem__(self, index):
+        return self.rows[index]
+
+
 def test_encode_layout_and_target_mask():
     tokenizer = make_tokenizer()
     encoded = tokenizer.encode_playlist(
@@ -157,6 +203,20 @@ def test_full_mask_completion_handles_reference_lengths_and_rejects_one_referenc
         assert "at least two" in str(exc)
     else:
         raise AssertionError("Expected a one-reference completion to be rejected")
+
+
+def test_test_tokenization_exposes_fifteen_references_and_five_labels():
+    tokenizer, item_ids = make_twenty_item_tokenizer()
+    source = FakeRows([{"bundle": "p", "item_seq": item_ids}])
+    row = tokenizer.tokenize({"test": source})["test"][0]
+
+    assert len(row["input_ids"]) == 2 + 15 * tokenizer.tokens_per_item
+    assert row["input_ids"][0] == tokenizer.bos_token
+    assert row["input_ids"][-1] == tokenizer.eos_token
+    assert len(row["labels"]) == 5
+    assert row["labels"][0] == tokenizer.semantic_tokens[item_ids[15]]
+    assert row["labels"][-1] == tokenizer.semantic_tokens[item_ids[19]]
+    assert np.allclose(row["mu_c"], 7.0)
 
 
 if __name__ == "__main__":

@@ -245,11 +245,15 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       if sigma_c2 is not None:
         sigma_c2 = sigma_c2.to(next(model.parameters()).device).float()
 
-      # GenPlaylist-v1 test labels are [B, 1, semantic_tokens].  The complete
-      # generation is always [BOS, one 13-token item, EOS].
-      if labels.ndim != 3 or labels.shape[1] != 1:
+      # Each draw is still next-one full-MASK completion, but evaluation uses
+      # five independent draws against the five songs following the same
+      # 15-song context.
+      eval_num_samples = int(config.protocol.eval_num_samples)
+      eval_target_items = int(config.protocol.eval_target_items)
+      if labels.ndim != 3 or labels.shape[1] != eval_target_items:
         raise ValueError(
-            f"rec_eval expects exactly one next-item label, got {tuple(labels.shape)}")
+            f"rec_eval expects {eval_target_items} future-item labels, "
+            f"got {tuple(labels.shape)}")
       num_items = 1
       tokens_per_item = tokenizer.tokens_per_item
       stride_length = 2 + tokens_per_item
@@ -257,23 +261,23 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       # DEBUG: 只在第一个batch打印配置信息
       if len(all_results) == 0:
         print(f"\n[Rec Eval Config]")
-        print("  Prediction mode: fixed next-one-item")
+        print("  Prediction mode: 15 references -> 5 independent next-one samples")
         print(f"  labels.shape: {labels.shape}")
         print(f"  labels[0, :]: {labels[0, :].tolist()}")
         print(f"  input_ids.shape: {input_ids.shape}")
         print(f"  input_ids[0, :]: {input_ids[0, :].tolist()}")
-        print(f"  num_items to generate: {num_items}")
+        print(f"  items per draw: {num_items}")
+        print(f"  independent draws: {eval_num_samples}")
         print(f"  tokens_per_item: {tokens_per_item} (BOI + {tokenizer.n_digit} RVQ digits + 1 conflict)")
         print(f"  calculated stride_length: {stride_length}")
 
-
-      max_k = max(config['evaluator']['topk'])  # 取topk中的最大值（例如topk=[10,20,50]则max_k=50）
-      # Draw max_k alternatives for the same single next-item slot.
+      # Draw five alternatives independently from the same context.  Samples
+      # are never fed back as context, so this remains next-one inference.
       text_samples = torch.zeros(
-          (input_ids.shape[0], max_k, stride_length), dtype=torch.long)
+          (input_ids.shape[0], eval_num_samples, stride_length), dtype=torch.long)
 
       # Each draw starts from a full-MASK payload; no next block is appended.
-      for i in range(max_k):
+      for i in range(eval_num_samples):
         generated_next_items = model.restore_model_and_sample_next_item(
             input_ids=input_ids,
             num_steps=config.sampling.steps,
@@ -324,7 +328,8 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
   evaluator.print_rvq_hit_statistics()
 
   # 保存候选集缓存（仅在第一次运行时保存）
-  evaluator.save_candidate_cache()
+  if evaluator.predict_num_items is not None:
+    evaluator.save_candidate_cache()
 
   return output_results
 

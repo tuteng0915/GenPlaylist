@@ -8,7 +8,6 @@ them as strings; conversion to embedding rows happens only through the shared
 from __future__ import annotations
 
 import json
-import random
 from logging import getLogger
 from pathlib import Path
 
@@ -103,25 +102,49 @@ class AbstractDataset:
         seq_len: int,
         if_train: bool = False,
     ) -> dict[str, list]:
-        """Return HF-Dataset columns, keeping every usable playlist.
+        """Build the frozen next-song train/validation/test examples.
 
-        Training augmentation creates at most one additional sequence per
-        playlist by applying deterministic adjacent swaps.  It never removes
-        playlists merely because they are shorter than ``seq_len``.
+        Training expands every playlist into chronological prefix-to-next
+        examples.  Each example contains at most ``seq_len`` total items, so
+        ``seq_len=16`` means up to 15 references followed by one target.
+
+        Test rows follow the fixed 15->5 protocol: playlists shorter than 20
+        items are excluded and the first 20 chronological items are retained.
+        The tokenizer later exposes the first 15 as context and the last five
+        as the unordered ground-truth set for many-to-many evaluation.
         """
         records = self._records_for_split(file_name)
         output: list[tuple[str, list[str]]] = []
-        rng = random.Random(int(self.config.get("seed", 1)))
+        protocol = self.config.get("protocol", {})
+        min_references = int(protocol.get("min_reference_items", 2))
+        eval_references = int(protocol.get("eval_reference_items", 15))
+        eval_targets = int(protocol.get("eval_target_items", 5))
+        eval_total = eval_references + eval_targets
+        configured_eval_total = int(protocol.get("eval_total_items", eval_total))
+        if configured_eval_total != eval_total:
+            raise ValueError(
+                "protocol.eval_total_items must equal eval_reference_items + "
+                f"eval_target_items ({eval_total}), got {configured_eval_total}")
+        if seq_len < min_references + 1:
+            raise ValueError(
+                f"seq_len={seq_len} cannot hold {min_references} references and one target")
+        if if_train and swap_ratio:
+            raise ValueError(
+                "swap_ratio must be 0 for chronological next-song training")
+
         for playlist_id, item_ids in records:
-            clipped = item_ids[:seq_len] if seq_len > 0 else list(item_ids)
-            output.append((playlist_id, clipped))
-            if if_train and swap_ratio > 0 and len(clipped) > 1:
-                augmented = list(clipped)
-                n_swaps = min(len(augmented) - 1, max(1, round(len(augmented) * swap_ratio)))
-                for index in rng.sample(range(len(augmented) - 1), k=n_swaps):
-                    augmented[index], augmented[index + 1] = (
-                        augmented[index + 1], augmented[index])
-                output.append((f"{playlist_id}:swap", augmented))
+            if if_train:
+                for target_index in range(min_references, len(item_ids)):
+                    context_start = max(0, target_index - (seq_len - 1))
+                    example = item_ids[context_start:target_index + 1]
+                    output.append((f"{playlist_id}:next:{target_index}", example))
+            elif file_name == "test":
+                if len(item_ids) >= configured_eval_total:
+                    output.append((playlist_id, item_ids[:configured_eval_total]))
+            elif len(item_ids) >= min_references + 1:
+                # Validation remains next-one: use the most recent bounded
+                # context and final item, without creating correlated windows.
+                output.append((playlist_id, item_ids[-seq_len:]))
         return {
             "bundle": [playlist_id for playlist_id, _ in output],
             "item_seq": [item_ids for _, item_ids in output],
