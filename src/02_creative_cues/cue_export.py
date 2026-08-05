@@ -179,6 +179,7 @@ def export_outputs(
 def compute_coverage_stats(
     item2cues: dict,
     vocab: list[str],
+    cue_limit: int | None = None,
 ) -> dict:
     """Compute coverage and distribution statistics for the cue mapping.
 
@@ -204,9 +205,12 @@ def compute_coverage_stats(
     unk_slots = 0
     items_with_unk = 0
 
+    selected_rows = []
     for entry in item2cues.values():
+        cue_ids = entry.cue_ids[:cue_limit] if cue_limit is not None else entry.cue_ids
+        selected_rows.append(cue_ids)
         has_unk = False
-        for cid in entry.cue_ids:
+        for cid in cue_ids:
             cue_counts[cid] += 1
             if cid == UNK_CUE_ID:
                 unk_slots += 1
@@ -216,7 +220,7 @@ def compute_coverage_stats(
 
     # Sum actual per-entry lengths rather than assuming a fixed count: item2cues may
     # come from a --num-cues override, so slot count isn't always 6/item.
-    total_slots = sum(len(entry.cue_ids) for entry in item2cues.values())
+    total_slots = sum(len(row) for row in selected_rows)
     coverage_rate = 1.0 - items_with_unk / n_items
     unk_rate = unk_slots / total_slots
 
@@ -235,6 +239,8 @@ def compute_coverage_stats(
 
     return {
         "n_items": n_items,
+        "cue_limit": cue_limit,
+        "slots_per_item": sorted({len(row) for row in selected_rows}),
         "coverage_rate": round(coverage_rate, 4),
         "unk_rate": round(unk_rate, 4),
         "vocab_coverage": round(vocab_coverage, 4),
@@ -247,23 +253,55 @@ def compute_coverage_stats(
 # Report writer
 # ---------------------------------------------------------------------------
 
-def write_report(stats: dict, output_dir: str) -> None:
+def write_report(
+    stats: dict,
+    output_dir: str,
+    *,
+    active_stats: dict | None = None,
+    stored_stats: dict | None = None,
+) -> None:
     """Write cue_report.md from coverage stats."""
     os.makedirs(output_dir, exist_ok=True)
     report_path = os.path.join(output_dir, "cue_report.md")
-    lines = [
-        "# Cue Mining Report\n",
-        f"**Items processed:** {stats.get('n_items', 0)}\n",
-        f"**Coverage rate** (≥1 non-unk cue): {stats.get('coverage_rate', 0):.1%}\n",
-        f"**UNK slot rate:** {stats.get('unk_rate', 0):.1%}\n",
-        f"**Vocab utilization:** {stats.get('vocab_coverage', 0):.1%} of non-unk vocab entries used\n",
-        f"**Cue entropy:** {stats.get('cue_entropy_bits', 0):.2f} bits\n",
-        "\n## Top-10 most assigned cues\n",
-        "| Rank | Cue | Count |\n",
-        "|------|-----|-------|\n",
-    ]
-    for rank, (cue, cnt) in enumerate(stats.get("top10_cues", []), 1):
-        lines.append(f"| {rank} | {cue} | {cnt} |\n")
+    lines = ["# Cue Mining Report\n"]
+    if active_stats is not None and stored_stats is not None:
+        lines.extend([
+            f"**Items processed:** {stored_stats.get('n_items', 0)}\n",
+            "\n## Active vs. stored cue health\n",
+            "| Scope | Slots/item | Fully assigned | UNK slot rate | Vocab utilization | Entropy | Intra-cos ↓ |\n",
+            "|---|---:|---:|---:|---:|---:|---:|\n",
+        ])
+        for label, values in (("Active@8", active_stats), ("Stored@16", stored_stats)):
+            slot_widths = values.get("slots_per_item", [])
+            slots = slot_widths[0] if len(slot_widths) == 1 else str(slot_widths)
+            intra = values.get("intra_cos_mean")
+            intra_text = "n/a" if intra is None else f"{intra:.4f}"
+            lines.append(
+                f"| {label} | {slots} | {values.get('coverage_rate', 0):.1%} | "
+                f"{values.get('unk_rate', 0):.1%} | "
+                f"{values.get('vocab_coverage', 0):.1%} | "
+                f"{values.get('cue_entropy_bits', 0):.2f} | {intra_text} |\n")
+        for label, values in (("Active@8", active_stats), ("Stored@16", stored_stats)):
+            lines.extend([
+                f"\n## Top-10 most assigned cues — {label}\n",
+                "| Rank | Cue | Count |\n",
+                "|------|-----|-------|\n",
+            ])
+            for rank, (cue, cnt) in enumerate(values.get("top10_cues", []), 1):
+                lines.append(f"| {rank} | {cue} | {cnt} |\n")
+    else:
+        lines.extend([
+            f"**Items processed:** {stats.get('n_items', 0)}\n",
+            f"**Coverage rate** (all slots non-UNK): {stats.get('coverage_rate', 0):.1%}\n",
+            f"**UNK slot rate:** {stats.get('unk_rate', 0):.1%}\n",
+            f"**Vocab utilization:** {stats.get('vocab_coverage', 0):.1%} of non-unk vocab entries used\n",
+            f"**Cue entropy:** {stats.get('cue_entropy_bits', 0):.2f} bits\n",
+            "\n## Top-10 most assigned cues\n",
+            "| Rank | Cue | Count |\n",
+            "|------|-----|-------|\n",
+        ])
+        for rank, (cue, cnt) in enumerate(stats.get("top10_cues", []), 1):
+            lines.append(f"| {rank} | {cue} | {cnt} |\n")
     with open(report_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
     print(f"[cue_export] Wrote report -> {report_path}")

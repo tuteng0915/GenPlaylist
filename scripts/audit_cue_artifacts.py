@@ -7,6 +7,7 @@ import argparse
 import collections
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -52,6 +53,34 @@ def _audit_test_windows(mapping: dict, test_split: Path) -> dict:
         "target_slots": target_items,
         "missing_item_count": len(missing),
         "missing_items": sorted(missing)[:25],
+    }
+
+
+def _cue_usage_stats(mapping: dict, vocab: list[str], cue_limit: int | None) -> dict:
+    rows = [row[:cue_limit] if cue_limit is not None else row for row in mapping.values()]
+    counts = collections.Counter(cue_id for row in rows for cue_id in row)
+    total_slots = sum(map(len, rows))
+    non_unk_total = total_slots - counts.get(0, 0)
+    entropy = 0.0
+    if non_unk_total:
+        for cue_id, count in counts.items():
+            if cue_id:
+                probability = count / non_unk_total
+                entropy -= probability * math.log2(probability)
+    return {
+        "cue_limit": cue_limit,
+        "slots_per_item": sorted({len(row) for row in rows}),
+        "fully_assigned_rate": round(
+            sum(0 not in row for row in rows) / max(len(rows), 1), 6),
+        "unk_slot_rate": round(counts.get(0, 0) / max(total_slots, 1), 6),
+        "distinct_non_unk_assigned": len({cue_id for cue_id in counts if cue_id}),
+        "vocab_utilization": round(
+            len({cue_id for cue_id in counts if cue_id}) / max(len(vocab) - 1, 1), 6),
+        "cue_entropy_bits": round(entropy, 6),
+        "top_assigned_cues": [
+            {"cue_id": cue_id, "cue": vocab[cue_id], "count": count}
+            for cue_id, count in counts.most_common() if cue_id
+        ][:25],
     }
 
 
@@ -125,6 +154,8 @@ def audit(cue_dir: Path, test_split: Path | None = None) -> dict:
         "score_order_violations": score_order_violations,
         "score_shape_mismatches": score_shape_mismatches,
         "top_assigned_cues": top,
+        "active_8_cue_health": _cue_usage_stats(mapping, vocab, cue_limit=8),
+        "stored_16_cue_health": _cue_usage_stats(mapping, vocab, cue_limit=None),
     }
     if test_split is not None:
         report["frozen_15_to_5_coverage"] = _audit_test_windows(

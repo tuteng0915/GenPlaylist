@@ -15,6 +15,9 @@ WP-A, WP-B, and WP-C. Machine-readable values are defined once in
 | Independent next-one samples | 5 |
 | Active cues per song | first 8 of 16 stored |
 | Evaluation sources | original val + test, exposed only as `test` |
+| Official reverse-diffusion steps | 256 |
+| Official evaluation seed | 1 |
+| Evaluation weights | EMA |
 
 WP-D synthesis/demo is explicitly excluded from this change. Its production UI
 continues to generate and present one next song; no WP-D demo source is modified.
@@ -50,6 +53,8 @@ continues to generate and present one next song; no WP-D demo source is modified
 - Report optimal matched cosine, multiset exact matches, recall, precision, F1,
   any-hit rate, and prediction unique ratio.  Duplicate generations cannot earn
   repeated credit for a single ground-truth item.
+- Use 256 reverse-diffusion steps, seed 1, and EMA weights for the official run.
+  Shorter samplers are smoke tests or explicit speed ablations, not the headline result.
 - Backbone training has no validation loader and does not inspect the unified
   test set. Checkpoints are saved every 500 steps plus `last.ckpt`; final metrics
   are computed only after training on the unified 941-example test set.
@@ -108,3 +113,34 @@ pins source, preparation-code, and output hashes. The validator rechecks every
 generated file, representative fresh tokenizations, batch shapes/masks, catalog alignment,
 and every vector identity. `train_spotify.sh` loads this cache by default and
 fails rather than silently recomputing if it is absent or stale.
+
+Run the official post-training evaluation with the final checkpoint:
+
+```bash
+cd /home/wjzhang/tt_workspace/model/GenPlaylist
+export GENPLAYLIST_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/dataset
+export GENPLAYLIST_ARTIFACT_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
+export GENPLAYLIST_PREPARED_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/processed/genplaylist-v2-16item-unified-test-15to5
+export GENPLAYLIST_EVAL_CKPT=/home/wjzhang/tt_workspace/model/GenPlaylist/src/03_backbone_recommender/outputs/spotify/2026.08.05/125953/checkpoints/step-20000.ckpt
+conda run -n music bash src/03_backbone_recommender/scripts/eval_spotify.sh
+```
+
+The runner evaluates all 941 rows and atomically writes a JSON containing the
+metrics, checkpoint and prepared-manifest hashes, git commit, seed, sampler,
+sampling-step count, catalog size, and protocol values under
+`src/03_backbone_recommender/outputs/evaluation/`.
+For a deliberately non-official smoke run, set both a shorter
+`GENPLAYLIST_EVAL_SAMPLING_STEPS` and
+`GENPLAYLIST_EVAL_ALLOW_PROTOCOL_OVERRIDE=true`; the JSON is then marked
+`official_protocol=false`.
+
+WP-A uses the same unified test windows. Its canonical CLHE baseline is:
+
+```bash
+conda run -n music python src/01_input_normalization/build_recall_eval.py \
+  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
+```
+
+Every evaluated encoder must cover exactly the same 5,119 catalog IDs. The
+reported MRR is the full-catalog reciprocal rank, not a Top-50 truncation.

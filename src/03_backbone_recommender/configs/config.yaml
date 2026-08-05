@@ -64,6 +64,13 @@ training:
 
 eval:
   checkpoint_path: ''  # Used to evaluate a checkpoint after training.
+  # rec_eval always writes a versioned JSON result. Null means the Hydra run
+  # directory's rec_eval_results.json; the official runner supplies an absolute path.
+  results_path: null
+  git_commit: null
+  # False for official metrics. True is recorded for explicitly named smoke or
+  # speed-ablation runs that override seed, EMA, or reverse-diffusion steps.
+  allow_protocol_override: false
   disable_ema: False
   compute_generative_perplexity: False
   perplexity_batch_size: 8
@@ -160,6 +167,9 @@ protocol:
   eval_reference_items: 15
   eval_target_items: 5
   eval_num_samples: 5
+  eval_sampling_steps: 256
+  eval_seed: 1
+  eval_use_ema: true
 
 num_proc: 1
 eval_batch_size: 32

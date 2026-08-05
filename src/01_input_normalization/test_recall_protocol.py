@@ -49,6 +49,31 @@ def test_loader_merges_sources_in_order():
         assert playlists == [items_a, items_b]
 
 
+def test_item_id_to_row_mapping_is_loaded_in_row_order():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "item_id_to_row.json"
+        path.write_text('{"song-b": 1, "song-a": 0}', encoding="utf-8")
+        assert module.load_row_ids(path) == ["song-a", "song-b"]
+
+
+def test_encoder_alignment_rejects_partial_catalog():
+    import numpy as np
+
+    try:
+        module.validate_encoder_alignment(
+            "fixture", np.ones((2, 4), dtype=np.float32),
+            ["a", "b"], {"a", "b", "c"})
+    except ValueError as exc:
+        assert "complete frozen catalog" in str(exc)
+    else:
+        raise AssertionError("Expected partial-catalog embeddings to be rejected")
+
+
+def test_mrr_uses_rank_beyond_top_fifty():
+    ranked = [f"wrong-{index}" for index in range(75)] + ["target"]
+    assert module.reciprocal_rank(ranked, {"target"}) == 1 / 76
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     for test in tests:

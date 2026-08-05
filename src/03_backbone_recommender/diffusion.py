@@ -440,7 +440,7 @@ class Diffusion(L.LightningModule):
     # 记录各 RVQ 层的未加权 NLL，帮助判断各层学习进度
     if losses.unweighted_nlls is not None:
       layer_stats = self._compute_layer_nll_stats(
-        batch['input_ids'], losses.unweighted_nlls)
+        batch['input_ids'], losses.unweighted_nlls, target_mask=target_mask)
       self.log_dict(
         {f'{prefix}/{k}': v for k, v in layer_stats.items()},
         on_step=(prefix == 'train'),
@@ -1173,13 +1173,14 @@ class Diffusion(L.LightningModule):
 
     return weights
 
-  def _compute_layer_nll_stats(self, x0, unweighted_nlls):
+  def _compute_layer_nll_stats(self, x0, unweighted_nlls, target_mask=None):
     """
     按 token 类型（d0/d1/.../conflict）分别统计平均未加权 NLL。
 
     参数：
       x0: [batch, seq_len]  原始 token 序列（用于定位各层 token 位置）
       unweighted_nlls: [batch, seq_len]  未加权的 per-token loss
+      target_mask: [batch, seq_len]  只统计 next-item payload；None 仅用于兼容
 
     返回：
       dict，key 为 'layer_nll/d{i}' 和 'layer_nll/conflict'，value 为标量 tensor
@@ -1193,25 +1194,38 @@ class Diffusion(L.LightningModule):
     positions = torch.arange(1, seq_len, device=x0.device)  # 跳过 BOS（pos 0）
     offsets = (positions - 1) % period  # 每个位置在 item 内的偏移
 
+    if target_mask is not None:
+      target_mask = target_mask.to(device=x0.device, dtype=torch.bool)
+      if target_mask.shape != x0.shape:
+        raise ValueError(
+          f'target_mask shape {tuple(target_mask.shape)} does not match '
+          f'x0 {tuple(x0.shape)}')
+
+    def masked_position_mean(column_mask):
+      values = unweighted_nlls[:, 1:][:, column_mask]
+      if target_mask is None:
+        return values.mean() if values.numel() > 0 else None
+      selected = target_mask[:, 1:][:, column_mask]
+      return values[selected].mean() if bool(selected.any()) else None
+
     for layer_idx in range(n_codebooks):
       target_offset = layer_idx + 1  # d{layer_idx} 的偏移
       col_mask = (offsets == target_offset)  # shape: [seq_len-1]
-      # 扩展到 [batch, seq_len]，只取 pos 1 到 seq_len-1 的列
-      layer_nlls = unweighted_nlls[:, 1:][: , col_mask]  # [batch, n_positions]
-      if layer_nlls.numel() > 0:
-        stats[f'layer_nll/d{layer_idx}'] = layer_nlls.mean()
+      layer_mean = masked_position_mean(col_mask)
+      if layer_mean is not None:
+        stats[f'layer_nll/d{layer_idx}'] = layer_mean
 
     # conflict digit：offset = n_codebooks + 1
     conflict_offset = n_codebooks + 1
     col_mask = (offsets == conflict_offset)
-    conflict_nlls = unweighted_nlls[:, 1:][:, col_mask]
-    if conflict_nlls.numel() > 0:
-      stats['layer_nll/conflict'] = conflict_nlls.mean()
+    conflict_mean = masked_position_mean(col_mask)
+    if conflict_mean is not None:
+      stats['layer_nll/conflict'] = conflict_mean
 
     cue_mask = offsets > conflict_offset
-    cue_nlls = unweighted_nlls[:, 1:][:, cue_mask]
-    if cue_nlls.numel() > 0:
-      stats['layer_nll/cues'] = cue_nlls.mean()
+    cue_mean = masked_position_mean(cue_mask)
+    if cue_mean is not None:
+      stats['layer_nll/cues'] = cue_mean
 
     return stats
 

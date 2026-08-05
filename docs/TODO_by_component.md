@@ -38,10 +38,12 @@ the WP-D demo is not changed by the offline evaluation protocol.
 - [x] Freeze evaluation to first 20 songs: 15 references and five targets.
 - [x] Draw five independent next-one samples without feeding predictions back.
 - [x] Score the 5x5 sets with full-catalog retrieval and Hungarian matching.
-- [ ] Generate/convert the server-side CLHE, RVQ, semantic-token, and cue artifacts.
-- [ ] Train a new checkpoint; old multi-item or old-vocabulary checkpoints are incompatible.
+- [x] Generate/convert the server-side CLHE, RVQ, semantic-token, and cue artifacts.
+- [x] Train the new 20,000-step checkpoint; old multi-item or old-vocabulary checkpoints are incompatible.
 - [ ] Run checkpoint preflight and one real next-item inference on the server.
 - [ ] Run the frozen 15->5 evaluation with the newly trained checkpoint.
+- [x] Add a versioned official evaluator that freezes EMA, seed 1, 256 steps,
+  full-catalog retrieval, and atomic result metadata.
 
 ## WP-D — Verbalization, synthesis, and study UI
 

@@ -76,7 +76,7 @@ def level1_intrinsic(
     }
 
 
-def within_item_diversity(item2cues, cue_embeddings) -> dict:
+def within_item_diversity(item2cues, cue_embeddings, cue_limit: int | None = None) -> dict:
     """Mean within-item pairwise cosine of each song's assigned cue embeddings.
 
     Lower = more diverse (paper target < 0.7). cue_embeddings[k] aligns with vocab
@@ -91,7 +91,8 @@ def within_item_diversity(item2cues, cue_embeddings) -> dict:
     sims: list[float] = []
     for entry in item2cues.values():
         vecs = []
-        for c in entry.cue_ids:
+        cue_ids = entry.cue_ids[:cue_limit] if cue_limit is not None else entry.cue_ids
+        for c in cue_ids:
             k = c - 1
             if c != 0 and 0 <= k < len(emb) and norms[k, 0] > 0:
                 vecs.append(unit[k])

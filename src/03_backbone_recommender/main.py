@@ -6,11 +6,14 @@ main.py - DISCO项目的主入口文件
 
 # ============ 标准库导入 ============
 import os  # 操作系统接口，用于文件路径等操作
+import hashlib
 import numpy as np  # 数值计算库，用于数组操作
 import time  # 时间相关操作
 import json  # JSON数据处理
 import warnings  # 警告控制
 from collections import defaultdict, OrderedDict  # 特殊字典类型，用于结果统计
+from datetime import datetime, timezone
+from pathlib import Path
 
 # ============ 第三方库导入 ============
 import fsspec  # 文件系统规范库，用于跨平台文件系统操作
@@ -33,6 +36,7 @@ import utils  # 工具函数集合
 from dataset import AbstractDataset  # 抽象数据集类，负责加载原始数据
 from warmstart import apply_ddbc_warmstart
 from prepared_data import load_prepared_tokenized_dataset
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 
 
 # ============ HuggingFace Dataset包装器 ============
@@ -204,6 +208,9 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       output_results: 包含各项评估指标的有序字典
   """
   logger.info('Starting RecSys Evaluation.')
+  allow_protocol_override = bool(config.eval.get('allow_protocol_override', False))
+  FROZEN_NEXT_SONG_PROTOCOL.validate_evaluation_config(
+      config, allow_override=allow_protocol_override)
 
   # 加载训练好的模型和评估器
   model = _load_from_checkpoint(config=config, tokenizer=tokenizer)
@@ -325,6 +332,63 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
         output_results[key] = round(float(values), 4)
 
   print("output_results", output_results)
+
+  # Persist both metrics and the exact evaluation provenance. Official results
+  # must not exist only in a terminal scrollback.
+  results_path_value = config.eval.get('results_path', None)
+  results_path = (
+      Path(results_path_value).expanduser().resolve()
+      if results_path_value
+      else Path.cwd() / 'rec_eval_results.json')
+
+  def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as handle:
+      for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+  checkpoint_path = Path(config.eval.checkpoint_path).expanduser().resolve()
+  prepared_path_value = config.get('prepared_dataset_path', None)
+  prepared_manifest_path = (
+      Path(prepared_path_value).expanduser().resolve() / 'prepared_manifest.json'
+      if prepared_path_value else None)
+  payload = {
+      'result_schema': 'genplaylist-wp-c-rec-eval-v1',
+      'created_utc': datetime.now(timezone.utc).isoformat(),
+      'git_commit': config.eval.get('git_commit', None),
+      'checkpoint': {
+          'path': str(checkpoint_path),
+          'sha256': file_sha256(checkpoint_path),
+      },
+      'prepared_data': {
+          'path': str(Path(prepared_path_value).expanduser().resolve())
+          if prepared_path_value else None,
+          'manifest_sha256': (
+              file_sha256(prepared_manifest_path)
+              if prepared_manifest_path and prepared_manifest_path.is_file() else None),
+      },
+      'protocol': omegaconf.OmegaConf.to_container(
+          config.protocol, resolve=True),
+      'evaluation': {
+          'test_examples': len(tokenized_dataset['test']),
+          'catalog_items': len(tokenizer.item_id_to_row),
+          'seed': int(config.seed),
+          'sampling_steps': int(config.sampling.steps),
+          'ema_enabled': not bool(config.eval.disable_ema),
+          'sampler': str(config.sampling.predictor),
+          'full_catalog_retrieval': True,
+          'matching': 'hungarian_clhe_5x5',
+          'official_protocol': not allow_protocol_override,
+      },
+      'metrics': dict(output_results),
+  }
+  results_path.parent.mkdir(parents=True, exist_ok=True)
+  temporary_path = results_path.with_name(results_path.name + '.tmp')
+  temporary_path.write_text(
+      json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+  os.replace(temporary_path, results_path)
+  print(f"Saved rec_eval results -> {results_path}")
 
   # 打印RVQ直接命中统计
   evaluator.print_rvq_hit_statistics()

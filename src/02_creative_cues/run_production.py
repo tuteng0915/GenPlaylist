@@ -165,14 +165,31 @@ def main():
 
     if not args.skip_health_check:
         # Cheap, API-free sanity stats only — no retrieval/grounding/reconstruction.
-        cov = cue_export.compute_coverage_stats(item2cues, vocab)
-        div = cue_eval.within_item_diversity(item2cues, cue_emb)
-        cue_export.write_report({**norm_stats, **cov, **div}, run_dir)
+        active_cov = cue_export.compute_coverage_stats(
+            item2cues, vocab, cue_limit=cfg.active_cues)
+        stored_cov = cue_export.compute_coverage_stats(item2cues, vocab)
+        active_div = cue_eval.within_item_diversity(
+            item2cues, cue_emb, cue_limit=cfg.active_cues)
+        stored_div = cue_eval.within_item_diversity(item2cues, cue_emb)
+        active_stats = {**active_cov, **active_div}
+        stored_stats = {**stored_cov, **stored_div}
+        cue_export.write_report(
+            {**norm_stats, **stored_stats}, run_dir,
+            active_stats=active_stats, stored_stats=stored_stats)
         os.replace(os.path.join(run_dir, "cue_report.md"),
                    os.path.join(run_dir, "health_report.md"))
-        print(f"[production] health check: coverage={cov.get('coverage_rate')} "
-              f"unk_rate={cov.get('unk_rate')} vocab_util={cov.get('vocab_coverage')} "
-              f"intra_cos={div.get('intra_cos_mean')}")
+        print(
+            f"[production] active@{cfg.active_cues}: "
+            f"coverage={active_cov.get('coverage_rate')} "
+            f"unk_rate={active_cov.get('unk_rate')} "
+            f"vocab_util={active_cov.get('vocab_coverage')} "
+            f"intra_cos={active_div.get('intra_cos_mean')}")
+        print(
+            f"[production] stored@{cfg.num_cues}: "
+            f"coverage={stored_cov.get('coverage_rate')} "
+            f"unk_rate={stored_cov.get('unk_rate')} "
+            f"vocab_util={stored_cov.get('vocab_coverage')} "
+            f"intra_cos={stored_div.get('intra_cos_mean')}")
 
     # "latest" mirrors the most recent run_dir so callers don't need to know the stamp.
     if os.path.isdir(latest_dir):

@@ -42,46 +42,47 @@ if SRC_ROOT not in sys.path:
 
 from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 
-DATA_DIR     = os.path.join(PROJECT_ROOT, 'data', 'dataset')
-AUDIO_DIR    = os.path.join(PROJECT_ROOT, 'data', 'audio')
+DEFAULT_DATA_DIR = os.environ.get(
+    'GENPLAYLIST_DATA_ROOT', os.path.join(PROJECT_ROOT, 'data', 'dataset'))
+DEFAULT_ARTIFACT_DIR = os.environ.get(
+    'GENPLAYLIST_ARTIFACT_ROOT', os.path.join(PROJECT_ROOT, 'data', 'dataset'))
+DEFAULT_AUDIO_DIR = os.environ.get(
+    'GENPLAYLIST_AUDIO_ROOT', os.path.join(PROJECT_ROOT, 'data', 'audio'))
 
-SPLITS_TEST = [
-    os.path.join(DATA_DIR, 'splits', 'val.txt'),
-    os.path.join(DATA_DIR, 'splits', 'test.txt'),
-]
-CATALOG_PATH = os.path.join(DATA_DIR, 'catalog_metadata.json')
 
-# Embedding files
-EMBS = {
-    'ST': {
-        'embs': os.path.join(DATA_DIR, 'catalog_text_embs.npy'),
-        'ids':  os.path.join(DATA_DIR, 'catalog_text_ids.json'),
-    },
-    'CLAP_text': {
-        'embs': os.path.join(DATA_DIR, 'catalog_clap_embs.npy'),
-        'ids':  os.path.join(DATA_DIR, 'catalog_clap_ids.json'),
-    },
-    'CLAP_audio': {
-        'embs': os.path.join(AUDIO_DIR, 'catalog_clap_audio_embs.npy'),
-        'ids':  os.path.join(AUDIO_DIR, 'catalog_clap_audio_ids.json'),
-    },
-    'CLHE': {
-        'embs': os.path.join(DATA_DIR, 'clhe.npy'),
-        'ids':  os.path.join(DATA_DIR, 'catalog_text_ids.json'),  # same insertion order
-    },
-    'LARP_audio': {
-        'embs': os.path.join(DATA_DIR, 'larp_audio_embs.npy'),
-        'ids':  os.path.join(DATA_DIR, 'larp_ids.json'),
-    },
-    'LARP_caption': {
-        'embs': os.path.join(DATA_DIR, 'larp_caption_embs.npy'),
-        'ids':  os.path.join(DATA_DIR, 'larp_ids.json'),
-    },
-    'LARP_fused': {
-        'embs': os.path.join(DATA_DIR, 'larp_fused_embs.npy'),
-        'ids':  os.path.join(DATA_DIR, 'larp_ids.json'),
-    },
-}
+def encoder_specs(data_dir: str, artifact_dir: str, audio_dir: str) -> dict[str, dict]:
+    """Resolve canonical CLHE plus optional WP-A baseline artifacts."""
+    return {
+        'CLHE': {
+            'embs': os.path.join(artifact_dir, 'catalog_item_embeddings.npy'),
+            'ids': os.path.join(artifact_dir, 'item_id_to_row.json'),
+            'required': True,
+        },
+        'ST': {
+            'embs': os.path.join(data_dir, 'catalog_text_embs.npy'),
+            'ids': os.path.join(data_dir, 'catalog_text_ids.json'),
+        },
+        'CLAP_text': {
+            'embs': os.path.join(data_dir, 'catalog_clap_embs.npy'),
+            'ids': os.path.join(data_dir, 'catalog_clap_ids.json'),
+        },
+        'CLAP_audio': {
+            'embs': os.path.join(audio_dir, 'catalog_clap_audio_embs.npy'),
+            'ids': os.path.join(audio_dir, 'catalog_clap_audio_ids.json'),
+        },
+        'LARP_audio': {
+            'embs': os.path.join(data_dir, 'larp_audio_embs.npy'),
+            'ids': os.path.join(data_dir, 'larp_ids.json'),
+        },
+        'LARP_caption': {
+            'embs': os.path.join(data_dir, 'larp_caption_embs.npy'),
+            'ids': os.path.join(data_dir, 'larp_ids.json'),
+        },
+        'LARP_fused': {
+            'embs': os.path.join(data_dir, 'larp_fused_embs.npy'),
+            'ids': os.path.join(data_dir, 'larp_ids.json'),
+        },
+    }
 
 K_VALUES = [5, 10, 20, 50]
 OUT_PATH = os.path.join(SCRIPT_DIR, 'outputs', 'recall_eval_15to5.json')
@@ -118,6 +119,51 @@ def load_test_playlists(
 def split_playlist(songs: list[str]) -> tuple[list[str], list[str]]:
     """Apply the immutable first-20, 15-reference/5-target split."""
     return FROZEN_NEXT_SONG_PROTOCOL.split_evaluation_items(songs)
+
+
+def load_row_ids(path: str | os.PathLike) -> list[str]:
+    """Load either an ordered ID list or the canonical item_id -> row mapping."""
+    with open(path, encoding="utf-8") as handle:
+        raw = json.load(handle)
+    if isinstance(raw, list):
+        ids = [str(item_id) for item_id in raw]
+    elif isinstance(raw, dict):
+        rows = {str(item_id): int(row) for item_id, row in raw.items()}
+        expected = set(range(len(rows)))
+        if set(rows.values()) != expected:
+            raise ValueError(f"{path}: row mapping must be contiguous 0..{len(rows) - 1}")
+        ids = [""] * len(rows)
+        for item_id, row in rows.items():
+            ids[row] = item_id
+    else:
+        raise ValueError(f"{path}: expected an ID list or item_id-to-row object")
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"{path}: duplicate item IDs")
+    return ids
+
+
+def validate_encoder_alignment(
+    name: str,
+    embeddings: np.ndarray,
+    id_list: list[str],
+    catalog_ids: set[str],
+) -> None:
+    if embeddings.ndim != 2:
+        raise ValueError(f"[{name}] embeddings must be 2-D, got {embeddings.shape}")
+    if embeddings.shape[0] != len(id_list):
+        raise ValueError(
+            f"[{name}] embedding rows ({embeddings.shape[0]}) != IDs ({len(id_list)})")
+    ids = set(id_list)
+    missing = sorted(catalog_ids - ids)
+    extra = sorted(ids - catalog_ids)
+    if missing or extra:
+        raise ValueError(
+            f"[{name}] must cover the complete frozen catalog; "
+            f"missing={missing[:5]}, extra={extra[:5]}")
+    if not np.isfinite(embeddings).all():
+        raise ValueError(f"[{name}] embeddings contain NaN or infinity")
+    if np.any(np.linalg.norm(embeddings, axis=1) <= np.finfo(np.float32).eps):
+        raise ValueError(f"[{name}] embeddings contain zero-norm catalog rows")
 
 
 def centroid_embedding(
@@ -183,22 +229,39 @@ def reciprocal_rank(retrieved: list[str], ground_truth: set[str]) -> float:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--data-dir', default=DEFAULT_DATA_DIR,
+                        help='Dataset root containing catalog_metadata.json and splits/')
+    parser.add_argument('--artifact-dir', default=DEFAULT_ARTIFACT_DIR,
+                        help='Canonical CLHE/item_id_to_row artifact root')
+    parser.add_argument('--audio-dir', default=DEFAULT_AUDIO_DIR,
+                        help='Optional CLAP-audio artifact root')
     parser.add_argument('--n-playlists', type=int, default=None,
                         help='Evaluate on first N eligible test playlists (default: all 941)')
+    parser.add_argument('--output', default=OUT_PATH,
+                        help='Output JSON path')
     parser.add_argument('--out-suffix', type=str, default='',
                         help='Suffix appended to output filename (e.g. "_split30")')
     args = parser.parse_args()
 
+    data_dir = os.path.abspath(os.path.expanduser(args.data_dir))
+    artifact_dir = os.path.abspath(os.path.expanduser(args.artifact_dir))
+    audio_dir = os.path.abspath(os.path.expanduser(args.audio_dir))
+    catalog_path = os.path.join(data_dir, 'catalog_metadata.json')
+    split_paths = [
+        os.path.join(data_dir, 'splits', 'val.txt'),
+        os.path.join(data_dir, 'splits', 'test.txt'),
+    ]
+
     # Load catalog
     print("Loading catalog ...")
-    with open(CATALOG_PATH) as f:
+    with open(catalog_path) as f:
         catalog = json.load(f)
     catalog_ids = set(catalog.keys())
     print(f"  {len(catalog_ids)} catalog songs")
 
     # Load test playlists
     print("Loading test playlists ...")
-    playlists = load_test_playlists(SPLITS_TEST, catalog_ids)
+    playlists = load_test_playlists(split_paths, catalog_ids)
     if args.n_playlists:
         playlists = playlists[:args.n_playlists]
     print(f"  {len(playlists)} playlists (min {min(len(p) for p in playlists)}, "
@@ -207,23 +270,21 @@ def main():
 
     # Load embeddings for each encoder
     encoders: dict[str, dict] = {}
-    for name, paths in EMBS.items():
+    for name, paths in encoder_specs(data_dir, artifact_dir, audio_dir).items():
         embs_path = paths['embs']
         ids_path  = paths['ids']
-        if not os.path.exists(embs_path):
-            print(f"  [{name}] SKIP — {embs_path} not found")
+        if not os.path.exists(embs_path) or not os.path.exists(ids_path):
+            message = f"[{name}] missing embeddings/IDs: {embs_path}, {ids_path}"
+            if paths.get('required', False):
+                raise FileNotFoundError(message)
+            print(f"  {message} — SKIP optional baseline")
             continue
         embs = np.load(embs_path).astype(np.float32)
+        id_list = load_row_ids(ids_path)
+        validate_encoder_alignment(name, embs, id_list, catalog_ids)
         # L2-normalise rows (idempotent if already normalised)
         norms = np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9
         embs = embs / norms
-
-        if ids_path and os.path.exists(ids_path):
-            with open(ids_path) as f:
-                id_list = [str(x) for x in json.load(f)]
-        else:
-            print(f"  [{name}] SKIP — no IDs file configured")
-            continue
 
         id_to_row = {iid: i for i, iid in enumerate(id_list)}
         encoders[name] = {'embs': embs, 'id_list': id_list, 'id_to_row': id_to_row}
@@ -252,8 +313,10 @@ def main():
                 skipped += 1
                 continue
 
-            max_k = max(K_VALUES)
-            retrieved = retrieve_top_k(q_emb, embs, id_list, exclude, max_k)
+            # Sort the complete non-reference catalog once. Recall/precision use
+            # their requested cutoffs; MRR uses the true full-catalog rank.
+            retrieved = retrieve_top_k(
+                q_emb, embs, id_list, exclude, len(id_list) - len(exclude))
 
             for k in K_VALUES:
                 recall[k].append(recall_at_k(retrieved, gt_set, k))
@@ -269,7 +332,7 @@ def main():
             'target_items': FROZEN_NEXT_SONG_PROTOCOL.eval_target_items,
             'recall':    {k: float(np.mean(v)) for k, v in recall.items()},
             'precision': {k: float(np.mean(v)) for k, v in precision.items()},
-            'mrr':       float(np.mean(rr_list)) if rr_list else 0.0,
+            'mrr_full_catalog': float(np.mean(rr_list)) if rr_list else 0.0,
         }
         print(f"\n[{enc_name}]  n={n_eval}  (15 references -> 5 targets)")
         print(f"  {'K':>4}  {'Recall@K':>10}  {'Precision@K':>12}")
@@ -277,12 +340,12 @@ def main():
             r = results[enc_name]['recall'][k]
             p = results[enc_name]['precision'][k]
             print(f"  {k:>4}  {r:>10.4f}  {p:>12.4f}")
-        print(f"   MRR  {results[enc_name]['mrr']:>10.4f}")
+        print(f"   MRR  {results[enc_name]['mrr_full_catalog']:>10.4f} (full catalog)")
 
     # Save (suffix in filename for split-ratio ablation)
-    out_path = OUT_PATH
+    out_path = os.path.abspath(os.path.expanduser(args.output))
     if args.out_suffix:
-        base, ext = os.path.splitext(OUT_PATH)
+        base, ext = os.path.splitext(out_path)
         out_path = f"{base}{args.out_suffix}{ext}"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'w') as f:

@@ -44,6 +44,31 @@ def test_manifest_marks_production_compatibility():
         assert (Path(temp_dir) / "item_cues.tsv").is_file()
 
 
+def test_health_metrics_separate_active_and_stored_cues():
+    vocab = ["<unk>", "one", "two", "three", "four"]
+    mapping = {
+        "a": CueMappingEntry("a", [1, 2, 3, 0]),
+        "b": CueMappingEntry("b", [2, 1, 4, 0]),
+    }
+    active = cue_export.compute_coverage_stats(mapping, vocab, cue_limit=2)
+    stored = cue_export.compute_coverage_stats(mapping, vocab)
+
+    assert active["slots_per_item"] == [2]
+    assert active["coverage_rate"] == 1.0
+    assert active["unk_rate"] == 0.0
+    assert active["vocab_coverage"] == 0.5
+    assert stored["slots_per_item"] == [4]
+    assert stored["coverage_rate"] == 0.0
+    assert stored["unk_rate"] == 0.25
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        cue_export.write_report(
+            stored, temp_dir, active_stats=active, stored_stats=stored)
+        report = (Path(temp_dir) / "cue_report.md").read_text(encoding="utf-8")
+        assert "Active@8" in report
+        assert "Stored@16" in report
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     for test in tests:

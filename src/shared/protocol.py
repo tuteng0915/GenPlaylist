@@ -16,6 +16,9 @@ class NextSongProtocol:
     eval_reference_items: int = 15
     eval_target_items: int = 5
     eval_num_samples: int = 5
+    eval_sampling_steps: int = 256
+    eval_seed: int = 1
+    eval_use_ema: bool = True
 
     @property
     def train_reference_items(self) -> int:
@@ -33,6 +36,8 @@ class NextSongProtocol:
             raise ValueError("Evaluation references and targets must sum to eval_total_items")
         if self.eval_num_samples != self.eval_target_items:
             raise ValueError("Evaluation must draw one sample per ground-truth item")
+        if self.eval_sampling_steps <= 0:
+            raise ValueError("Evaluation sampling steps must be positive")
         return self
 
     def validate_config(self, config: Mapping) -> "NextSongProtocol":
@@ -48,12 +53,44 @@ class NextSongProtocol:
             "eval_reference_items": self.eval_reference_items,
             "eval_target_items": self.eval_target_items,
             "eval_num_samples": self.eval_num_samples,
+            "eval_sampling_steps": self.eval_sampling_steps,
+            "eval_seed": self.eval_seed,
+            "eval_use_ema": self.eval_use_ema,
         }
         for name, value in expected.items():
             configured = int(protocol.get(name, value))
             if configured != value:
                 raise ValueError(
                     f"Frozen protocol.{name} is {value}, got {configured}")
+        return self
+
+    def validate_evaluation_config(
+        self, config: Mapping, *, allow_override: bool = False,
+    ) -> "NextSongProtocol":
+        """Reject silent stochastic-setting drift in an official rec_eval."""
+        sampling = config.get("sampling", {})
+        evaluation = config.get("eval", {})
+        actual = {
+            "seed": int(config.get("seed", self.eval_seed)),
+            "sampling.steps": int(sampling.get("steps", self.eval_sampling_steps)),
+            "eval.disable_ema": bool(
+                evaluation.get("disable_ema", not self.eval_use_ema)),
+        }
+        expected = {
+            "seed": self.eval_seed,
+            "sampling.steps": self.eval_sampling_steps,
+            "eval.disable_ema": not self.eval_use_ema,
+        }
+        drift = {
+            name: (expected[name], value)
+            for name, value in actual.items() if value != expected[name]
+        }
+        if drift and not allow_override:
+            rendered = ", ".join(
+                f"{name}: expected {wanted}, got {found}"
+                for name, (wanted, found) in drift.items())
+            raise ValueError(
+                "Official GenPlaylist evaluation settings drifted: " + rendered)
         return self
 
     def split_evaluation_items(
