@@ -1,6 +1,6 @@
 # Frozen next-song training and evaluation protocol
 
-This is the authoritative GenPlaylist-v1 experimental contract shared by
+This is the authoritative GenPlaylist-v2 experimental contract shared by
 WP-A, WP-B, and WP-C. Machine-readable values are defined once in
 `src/shared/protocol.py`; WP-C rejects Hydra overrides that drift from them.
 
@@ -14,6 +14,7 @@ WP-A, WP-B, and WP-C. Machine-readable values are defined once in
 | Test ground truth | songs 16–20 |
 | Independent next-one samples | 5 |
 | Active cues per song | first 8 of 16 stored |
+| Evaluation sources | original val + test, exposed only as `test` |
 
 WP-D synthesis/demo is explicitly excluded from this change. Its production UI
 continues to generate and present one next song; no WP-D demo source is modified.
@@ -32,11 +33,12 @@ continues to generate and present one next song; no WP-D demo source is modified
   and the first eight of its 16 stored ranked cue IDs.
 - The maximum model sequence length is 210 tokens: `BOS + 16 * 13 + EOS`.
 
-## Evaluation
+## Unified test evaluation
 
-- Keep only test playlists with at least 20 songs and deterministically retain
-  their first 20 chronological songs.  This gives 468 examples in the current
-  frozen test split.
+- Concatenate the original `val.txt` and `test.txt` sources in that order and
+  expose them only as the `test` split. There is no separate `valid` split.
+- Keep only playlists with at least 20 songs and deterministically retain their
+  first 20 chronological songs. This gives 473 + 468 = 941 test examples.
 - Songs 1–15 are the shared reference context.  Songs 16–20 are the five
   ground-truth future songs.
 - Run the next-one full-MASK sampler independently five times from the unchanged
@@ -48,6 +50,9 @@ continues to generate and present one next song; no WP-D demo source is modified
 - Report optimal matched cosine, multiset exact matches, recall, precision, F1,
   any-hit rate, and prediction unique ratio.  Duplicate generations cannot earn
   repeated credit for a single ground-truth item.
+- Backbone training has no validation loader and does not inspect the unified
+  test set. Checkpoints are saved every 500 steps plus `last.ckpt`; final metrics
+  are computed only after training on the unified 941-example test set.
 
 ## Cross-WP responsibilities
 
@@ -64,10 +69,12 @@ continues to generate and present one next song; no WP-D demo source is modified
 ## Reproducibility rules
 
 - Preserve playlist order and take the first 20; do not random-crop test rows.
+- Preserve source order: eligible original-validation rows first, then eligible
+  original-test rows.
 - Do not feed any sampled prediction back into the 15-song context.
 - Do not use adjacent-swap augmentation.
 - Do not change one of the frozen numbers independently. A new setting requires
-  a new named protocol/version rather than silently editing GenPlaylist-v1.
+  a new named protocol/version rather than silently editing GenPlaylist-v2.
 
 ## Server run note
 
@@ -86,18 +93,18 @@ Prepare all checkpoint-independent data once before training:
 conda run -n music python scripts/prepare_wp_c_data.py \
   --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v1-16item-15to5
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v2-16item-unified-test-15to5
 
 conda run -n music python scripts/validate_wp_c_prepared_data.py \
   --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
-  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v1-16item-15to5
+  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v2-16item-unified-test-15to5
 ```
 
 The versioned output contains raw and tokenized Arrow `DatasetDict`s, normalized
 catalog CLHE and RVQ-reconstruction matrices, semantic/cue matrices, full legal
 type masks, and every checkpoint-independent 15->5 test tensor. Its manifest
-pins source, preparation-code, and output hashes. The validator rechecks all 47
-files, representative fresh tokenizations, batch shapes/masks, catalog alignment,
+pins source, preparation-code, and output hashes. The validator rechecks every
+generated file, representative fresh tokenizations, batch shapes/masks, catalog alignment,
 and every vector identity. `train_spotify.sh` loads this cache by default and
 fails rather than silently recomputing if it is absent or stale.

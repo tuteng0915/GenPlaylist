@@ -11,8 +11,12 @@ TRAIN_MODE="${GENPLAYLIST_TRAIN_MODE:-warmstart}"
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
 WARMSTART_CKPT="${GENPLAYLIST_WARMSTART_CKPT:-$REPO_ROOT/checkpoints/pretrained/ddbc/spotify30.ckpt}"
-DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v1-16item-15to5"
+DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v2-16item-unified-test-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
+MODEL_SIZE="${GENPLAYLIST_MODEL_SIZE:-small}"
+GLOBAL_BATCH_SIZE="${GENPLAYLIST_GLOBAL_BATCH_SIZE:-512}"
+TRAIN_BATCH_SIZE="${GENPLAYLIST_TRAIN_BATCH_SIZE:-300}"
+MAX_STEPS="${GENPLAYLIST_MAX_STEPS:-20000}"
 
 if [[ ! -f "$PREPARED_DATA_ROOT/prepared_manifest.json" ]]; then
   echo "Missing prepared WP-C data: $PREPARED_DATA_ROOT/prepared_manifest.json" >&2
@@ -50,13 +54,14 @@ case "$TRAIN_MODE" in
 esac
 
 # Generate unique run name with timestamp to avoid conflicts
-RUN_NAME="genplaylist-v1-spotify16-$(date +%Y%m%d-%H%M%S)"
+RUN_NAME="genplaylist-v2-spotify16-$(date +%Y%m%d-%H%M%S)"
 
 cd "$WP_ROOT"
 python main.py \
-  loader.batch_size=300 \
+  loader.global_batch_size="$GLOBAL_BATCH_SIZE" \
+  loader.batch_size="$TRAIN_BATCH_SIZE" \
   loader.eval_batch_size=128 \
-  model=small \
+  model="$MODEL_SIZE" \
   data=spotify \
   data_root="$DATA_ROOT" \
   catalog_embeddings_path="$ARTIFACT_ROOT/catalog_item_embeddings.npy" \
@@ -68,6 +73,7 @@ python main.py \
   cue_manifest_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_manifest.json" \
   prepared_dataset_path="$PREPARED_DATA_ROOT" \
   +run_name=${RUN_NAME} \
+  trainer.max_steps="$MAX_STEPS" \
   parameterization=subs \
   eval.compute_generative_perplexity=False \
   sampling.steps=25 \

@@ -235,7 +235,9 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
     context_ids = _load_vector(vector_dir, manifest, "eval_context_input_ids.npy")
     completion_ids = _load_vector(vector_dir, manifest, "eval_completion_input_ids.npy")
     completion_mask = _load_vector(vector_dir, manifest, "eval_completion_mask.npy")
-    if context_ids.shape != (468, 197) or completion_ids.shape != (468, 210):
+    expected_test = EXPECTED_SPLIT_COUNTS["test"]
+    if context_ids.shape != (expected_test, 197) or completion_ids.shape != (
+            expected_test, 210):
         raise ValueError("Evaluation context/completion token shapes drifted")
     if not np.all(completion_mask.sum(axis=1) == 12):
         raise ValueError("Each evaluation completion must mask exactly 12 payload tokens")

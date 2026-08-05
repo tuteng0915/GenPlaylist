@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 from pathlib import Path
 
 
@@ -60,6 +61,29 @@ def test_test_split_keeps_only_first_twenty_items():
 
     assert result["bundle"] == ["long"]
     assert result["item_seq"] == [[str(index) for index in range(20)]]
+
+
+def test_unified_test_reads_original_val_then_test_sources():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        (root / "splits").mkdir()
+        (root / "splits" / "val.txt").write_text("v, 1, 2, 3\n", encoding="utf-8")
+        (root / "splits" / "test.txt").write_text("t, 2, 3, 4\n", encoding="utf-8")
+        dataset = object.__new__(AbstractDataset)
+        dataset._root = root
+        dataset.item2meta = {str(index): {} for index in range(1, 5)}
+
+        assert dataset._records_for_split("test") == [
+            ("v", ["1", "2", "3"]),
+            ("t", ["2", "3", "4"]),
+        ]
+
+        try:
+            dataset._records_for_split("valid")
+        except ValueError as exc:
+            assert "train/test only" in str(exc)
+        else:
+            raise AssertionError("Expected the removed valid split to be rejected")
 
 
 if __name__ == "__main__":

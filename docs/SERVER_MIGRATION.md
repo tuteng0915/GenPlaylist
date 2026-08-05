@@ -198,10 +198,12 @@ conda run -n music python scripts/check_ddbc_warmstart.py --backward-smoke
 The default Spotify configuration now selects `GenPlaylistTokenizer`, reads the
 canonical data directory, uses a 13-token stride, and conditions DiT on
 `mu_c`/`sigma_c2`. Training expands every chronological prefix into at most 15
-recent references plus one next-item target (16 songs total). Evaluation keeps
-only test playlists with at least 20 songs, takes the first 20, uses songs 1–15
-as references and songs 16–20 as targets, and draws the same next-one slot five
-times for 5x5 matching. `src/shared/protocol.py` rejects configuration drift.
+recent references plus one next-item target (16 songs total). The original val
+and test sources are merged into one 941-row unified test set after first-20
+filtering: songs 1–15 are references, songs 16–20 are targets, and the same
+next-one slot is drawn five times for 5x5 matching. Training has no validation
+loader; checkpoints are saved by step. `src/shared/protocol.py` rejects
+configuration drift.
 
 Before a long run, use Hydra overrides for a one-batch smoke test and confirm:
 
@@ -217,12 +219,21 @@ once before launching training:
 conda run -n music python scripts/prepare_wp_c_data.py \
   --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
   --artifact-dir data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v1-16item-15to5
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v2-16item-unified-test-15to5
 ```
 
 `train_spotify.sh` resolves that directory from `GENPLAYLIST_DATA_ROOT` by
 default. Override it with `GENPLAYLIST_PREPARED_DATA_ROOT` only when using a
 separately versioned cache.
+
+Before the full 20,000-step run, use the same entry point for a one-step smoke:
+
+```bash
+GENPLAYLIST_MAX_STEPS=1 \
+GENPLAYLIST_GLOBAL_BATCH_SIZE=4 \
+GENPLAYLIST_TRAIN_BATCH_SIZE=4 \
+  bash src/03_backbone_recommender/scripts/train_spotify.sh
+```
 
 ## 6. Live pipeline adapter
 

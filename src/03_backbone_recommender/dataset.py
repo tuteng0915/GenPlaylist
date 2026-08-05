@@ -75,7 +75,7 @@ class AbstractDataset:
         self.split_data = self.split()
         self.bi_full = [
             item_ids
-            for split_name in ("train", "valid", "test")
+            for split_name in ("train", "test")
             for _, item_ids in self._records_for_split(split_name)
         ]
 
@@ -92,14 +92,24 @@ class AbstractDataset:
                 "GenPlaylist dataset is incomplete; missing: " + ", ".join(missing))
 
     def _records_for_split(self, split: str) -> list[tuple[str, list[str]]]:
-        source_name = "val" if split == "valid" else split
-        records = read_split_file(self._root / "splits" / f"{source_name}.txt")
+        if split not in {"train", "test"}:
+            raise ValueError(f"Unknown split {split!r}; GenPlaylist-v2 exposes train/test only")
+        source_names = ("val", "test") if split == "test" else (split,)
+        records = [
+            record
+            for source_name in source_names
+            for record in read_split_file(self._root / "splits" / f"{source_name}.txt")
+        ]
         known_ids = set(self.item2meta)
         unknown = sorted({item_id for _, seq in records for item_id in seq} - known_ids)
         if unknown:
             raise ValueError(
-                f"Split {source_name!r} references {len(unknown)} catalog-missing IDs: "
+                f"Split sources {source_names!r} reference {len(unknown)} "
+                "catalog-missing IDs: "
                 f"{unknown[:5]}")
+        playlist_ids = [playlist_id for playlist_id, _ in records]
+        if len(set(playlist_ids)) != len(playlist_ids):
+            raise ValueError(f"Split sources {source_names!r} contain duplicate playlist IDs")
         return records
 
     def convert_txt_to_dataset(
@@ -109,14 +119,15 @@ class AbstractDataset:
         seq_len: int,
         if_train: bool = False,
     ) -> dict[str, list]:
-        """Build the frozen next-song train/validation/test examples.
+        """Build the frozen next-song train/unified-test examples.
 
         Training expands every playlist into chronological prefix-to-next
         examples.  Each example contains at most ``seq_len`` total items, so
         ``seq_len=16`` means up to 15 references followed by one target.
 
-        Test rows follow the fixed 15->5 protocol: playlists shorter than 20
-        items are excluded and the first 20 chronological items are retained.
+        Test rows combine the original val/test sources and follow the fixed
+        15->5 protocol: playlists shorter than 20 items are excluded and the
+        first 20 chronological items are retained.
         The tokenizer later exposes the first 15 as context and the last five
         as the unordered ground-truth set for many-to-many evaluation.
         """
@@ -141,10 +152,6 @@ class AbstractDataset:
                 if len(item_ids) >= protocol.eval_total_items:
                     references, targets = protocol.split_evaluation_items(item_ids)
                     output.append((playlist_id, [*references, *targets]))
-            elif len(item_ids) >= min_references + 1:
-                # Validation remains next-one: use the most recent bounded
-                # context and final item, without creating correlated windows.
-                output.append((playlist_id, item_ids[-seq_len:]))
         return {
             "bundle": [playlist_id for playlist_id, _ in output],
             "item_seq": [item_ids for _, item_ids in output],
@@ -157,7 +164,7 @@ class AbstractDataset:
             self._split_cache = {
                 split: Dataset.from_dict(self.convert_txt_to_dataset(
                     split, swap_ratio, seq_len, if_train=(split == "train")))
-                for split in ("train", "valid", "test")
+                for split in ("train", "test")
             }
         return self._split_cache
 

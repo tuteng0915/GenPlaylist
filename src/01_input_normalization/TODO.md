@@ -13,5 +13,5 @@
 
 - [ ] Build the final retrieval matrix aligned to `item_id_to_row.json`.
 - [ ] Choose and version the production query encoder.
-- [ ] Rebuild the 468 eligible frozen test examples; remove placeholder metrics.
+- [ ] Rebuild the 941 eligible unified-test examples; remove placeholder metrics.
 - [ ] Report Recall@K/cosine statistics on a versioned evaluation set.

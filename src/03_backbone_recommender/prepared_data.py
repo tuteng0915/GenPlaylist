@@ -10,12 +10,11 @@ from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 from shared.schema import SCHEMA_VERSION, TOKEN_LAYOUT
 
 
-PREPARED_DATA_VERSION = "genplaylist-v1-16item-15to5"
-EXPECTED_SPLIT_COUNTS = {"train": 140433, "valid": 658, "test": 468}
+PREPARED_DATA_VERSION = "genplaylist-v2-16item-unified-test-15to5"
+EXPECTED_SPLIT_COUNTS = {"train": 140433, "test": 941}
 PREPARATION_CODE_FILES = (
     "scripts/prepare_wp_c_data.py",
     "src/00_data_schema/schema.py",
-    "src/03_backbone_recommender/configs/config.yaml",
     "src/03_backbone_recommender/dataset.py",
     "src/03_backbone_recommender/genplaylist_tokenizer.py",
     "src/03_backbone_recommender/prepared_data.py",

@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /callbacks: [checkpoint_every_n_steps, learning_rate_monitor]
   - /data: spotify
   - /model: small
   - /strategy: ddp
@@ -89,11 +89,11 @@ trainer:
   accumulate_grad_batches: ${div_up:${loader.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size} * ${trainer.num_nodes}}}
   gradient_clip_val: 1.0
   precision: 'bf16'
-  num_sanity_val_steps: 2
+  num_sanity_val_steps: 0
   max_steps: 20000
   log_every_n_steps: 10
   limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
-  limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
+  limit_val_batches: 0.0     # no validation split; evaluate unified test after training
   val_check_interval: 32
 
 wandb: null  # 已禁用，使用 TensorBoard 替代（bash scripts/start_tensorboard.sh）

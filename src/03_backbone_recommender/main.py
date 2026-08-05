@@ -100,18 +100,18 @@ def _load_from_checkpoint(config, tokenizer):
 
 
 @L.pytorch.utilities.rank_zero_only  # 装饰器：仅在主进程（rank 0）执行，用于分布式训练
-def _print_batch(train_ds, valid_ds, tokenizer, k=64):
+def _print_batch(train_ds, test_ds, tokenizer, k=64):
   """
   打印训练和验证数据批次的样例（调试用）
 
   Args:
       train_ds: 训练数据加载器
-      valid_ds: 验证数据加载器
+      test_ds: 测试数据加载器
       tokenizer: 分词器
       k: 打印前k个和后k个token
   """
   for dl_type, dl in [
-    ('train', train_ds), ('valid', valid_ds)]:
+    ('train', train_ds), ('test', test_ds)]:
     print(f'Printing {dl_type} dataloader batch.')
 
     batch = next(iter(dl))  # 获取一个批次的数据
@@ -449,14 +449,11 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
   # 创建训练数据加载器
   # 将HuggingFace Dataset包装为torch Dataset，使Lightning可以正确应用DistributedSampler
   train_batch_size = config.get('loader', {}).get('batch_size', config.get('train_batch_size', 64))
-  eval_batch_size = config.get('loader', {}).get('eval_batch_size', config.get('eval_batch_size', 32))
-
-  logger.info(f'Creating DataLoaders: train_batch_size={train_batch_size}, eval_batch_size={eval_batch_size}')
+  logger.info(f'Creating train DataLoader: train_batch_size={train_batch_size}')
   logger.info(f'Train dataset type: {type(tokenized_dataset["train"])}, length: {len(tokenized_dataset["train"])}')
 
   # 包装HuggingFace Dataset为torch Dataset
   train_dataset_wrapped = TorchDatasetWrapper(tokenized_dataset['train'])
-  valid_dataset_wrapped = TorchDatasetWrapper(tokenized_dataset['valid'])
 
   logger.info(f'Wrapped train dataset type: {type(train_dataset_wrapped)}')
 
@@ -465,17 +462,6 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
       batch_size=train_batch_size,
       shuffle=True,  # Lightning DDP会自动替换为DistributedSampler
       collate_fn=tokenizer.collate_fn['train'],
-      num_workers=0,
-      pin_memory=True,
-      persistent_workers=False
-  )
-
-  # 创建验证数据加载器
-  valid_ds = DataLoader(
-      valid_dataset_wrapped,  # 使用包装后的dataset
-      batch_size=eval_batch_size,
-      shuffle=False,
-      collate_fn=tokenizer.collate_fn['val'],
       num_workers=0,
       pin_memory=True,
       persistent_workers=False
@@ -509,7 +495,10 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
 
   # 开始训练（自动处理训练循环、验证、checkpoint保存等）
   # 如果ckpt_path不为None，会自动从checkpoint恢复
-  trainer.fit(model, train_ds, valid_ds, ckpt_path=ckpt_path)
+  # There is deliberately no validation loader. The original val/test sources
+  # form one final test set whose five answers are hidden in labels and therefore
+  # cannot define a training-time target_mask loss. Checkpoints are step-based.
+  trainer.fit(model, train_ds, ckpt_path=ckpt_path)
 
   # 以下是旧版本的trainer代码（已注释）
   # Trainer
@@ -531,7 +520,7 @@ def main(config):
 
   整体流程：
   1. 设置随机种子
-  2. 加载原始数据集（train/valid/test）
+  2. 加载原始数据集（train/test；test 合并原 val/test 来源）
   3. 使用RQ-VAE将物品编码为离散token
   4. 根据mode参数执行不同任务：
      - train: 训练扩散模型
@@ -549,9 +538,9 @@ def main(config):
   logger = utils.get_logger(__name__)
 
   # ============ 第1步：加载数据集 ============
-  # 从datasets/{dataset_name}/目录加载train.txt、valid.txt、test.txt
+  # 从 split 文件加载 train，以及合并后的统一 test
   dataset = AbstractDataset(config)
-  split_datasets = dataset.split()  # 返回包含train/valid/test的字典
+  split_datasets = dataset.split()  # 返回包含 train/test 的字典
 
   # ============ 第2步：初始化分词器 ============
   # 分词器负责将bundle转换为token序列

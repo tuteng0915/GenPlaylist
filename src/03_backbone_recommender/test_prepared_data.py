@@ -37,7 +37,7 @@ def test_valid_manifest_matches_frozen_protocol():
 
 def test_wrong_split_count_is_rejected():
     manifest = valid_manifest()
-    manifest["split_counts"]["test"] = 658
+    manifest["split_counts"]["test"] = 468
     try:
         validate_prepared_manifest(
             manifest, {"seq_len": 16, "protocol": {}}, FakeTokenizer())

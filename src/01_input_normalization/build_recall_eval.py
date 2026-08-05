@@ -2,7 +2,7 @@
 
 Protocol
 --------
-For each test playlist:
+For each playlist in the unified original-val + original-test source:
   1. Require every song to be present in the frozen catalog.
   2. Keep playlists with at least 20 songs and retain the first 20.
   3. Split: songs 1-15 = query context, songs 16-20 = ground truth.
@@ -45,7 +45,10 @@ from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 DATA_DIR     = os.path.join(PROJECT_ROOT, 'data', 'dataset')
 AUDIO_DIR    = os.path.join(PROJECT_ROOT, 'data', 'audio')
 
-SPLITS_TEST  = os.path.join(DATA_DIR, 'splits', 'test.txt')
+SPLITS_TEST = [
+    os.path.join(DATA_DIR, 'splits', 'val.txt'),
+    os.path.join(DATA_DIR, 'splits', 'test.txt'),
+]
 CATALOG_PATH = os.path.join(DATA_DIR, 'catalog_metadata.json')
 
 # Embedding files
@@ -88,22 +91,27 @@ OUT_PATH = os.path.join(SCRIPT_DIR, 'outputs', 'recall_eval_15to5.json')
 # Helpers
 # ---------------------------------------------------------------------------
 
-def load_test_playlists(path: str, catalog_ids: set[str]) -> list[list[str]]:
-    """Load catalog-aligned test rows that satisfy the frozen 20-song window."""
+def load_test_playlists(
+    paths: str | os.PathLike | list[str | os.PathLike],
+    catalog_ids: set[str],
+) -> list[list[str]]:
+    """Load the unified catalog-aligned test rows in deterministic source order."""
     playlists = []
-    with open(path, encoding="utf-8") as f:
-        for line_no, line in enumerate(f, 1):
-            fields = [value.strip() for value in line.strip().split(',') if value.strip()]
-            if not fields:
-                continue
-            songs = fields[1:]  # first field is the playlist ID
-            unknown = [item_id for item_id in songs if item_id not in catalog_ids]
-            if unknown:
-                raise ValueError(
-                    f"{path}:{line_no}: item IDs missing from catalog: {unknown[:5]}")
-            if len(songs) >= FROZEN_NEXT_SONG_PROTOCOL.eval_total_items:
-                references, targets = FROZEN_NEXT_SONG_PROTOCOL.split_evaluation_items(songs)
-                playlists.append([*references, *targets])
+    source_paths = [paths] if isinstance(paths, (str, os.PathLike)) else paths
+    for path in source_paths:
+        with open(path, encoding="utf-8") as f:
+            for line_no, line in enumerate(f, 1):
+                fields = [value.strip() for value in line.strip().split(',') if value.strip()]
+                if not fields:
+                    continue
+                songs = fields[1:]  # first field is the playlist ID
+                unknown = [item_id for item_id in songs if item_id not in catalog_ids]
+                if unknown:
+                    raise ValueError(
+                        f"{path}:{line_no}: item IDs missing from catalog: {unknown[:5]}")
+                if len(songs) >= FROZEN_NEXT_SONG_PROTOCOL.eval_total_items:
+                    references, targets = FROZEN_NEXT_SONG_PROTOCOL.split_evaluation_items(songs)
+                    playlists.append([*references, *targets])
     return playlists
 
 
@@ -176,7 +184,7 @@ def reciprocal_rank(retrieved: list[str], ground_truth: set[str]) -> float:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--n-playlists', type=int, default=None,
-                        help='Evaluate on first N eligible test playlists (default: all 468)')
+                        help='Evaluate on first N eligible test playlists (default: all 941)')
     parser.add_argument('--out-suffix', type=str, default='',
                         help='Suffix appended to output filename (e.g. "_split30")')
     args = parser.parse_args()
@@ -256,7 +264,7 @@ def main():
         results[enc_name] = {
             'n_playlists': n_eval,
             'skipped': skipped,
-            'protocol': 'first20_15ref_5target',
+            'protocol': 'unified_val_test_first20_15ref_5target',
             'reference_items': FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items,
             'target_items': FROZEN_NEXT_SONG_PROTOCOL.eval_target_items,
             'recall':    {k: float(np.mean(v)) for k, v in recall.items()},

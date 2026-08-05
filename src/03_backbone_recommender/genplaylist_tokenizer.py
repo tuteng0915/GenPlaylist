@@ -83,7 +83,6 @@ class GenPlaylistTokenizer:
         self._validate_artifacts()
         self.collate_fn = {
             "train": self.collate_batch,
-            "val": self.collate_batch,
             "test": self.collate_batch,
         }
 
