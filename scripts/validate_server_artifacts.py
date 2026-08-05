@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-fast validation for all artifacts required before WP-D training."""
+"""Fail-fast validation for all artifacts required before WP-C training."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ SRC_ROOT = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 from shared.artifacts import load_catalog_artifacts  # noqa: E402
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL  # noqa: E402
 
 TOKENIZER_PATH = SRC_ROOT / "03_backbone_recommender" / "genplaylist_tokenizer.py"
 spec = importlib.util.spec_from_file_location("genplaylist_tokenizer", TOKENIZER_PATH)
@@ -74,7 +75,9 @@ def main() -> int:
         }
 
     first = read_split(data / "splits" / "train.txt")[0]
-    smoke = tokenizer.encode_playlist(first[:min(len(first), 30)], context_items=min(len(first), 30) - 1)
+    train_window = first[:FROZEN_NEXT_SONG_PROTOCOL.train_total_items]
+    smoke = tokenizer.encode_playlist(
+        train_window, context_items=len(train_window) - 1)
     report["smoke_sequence_length"] = int(len(smoke.input_ids))
     report["smoke_target_tokens"] = int(smoke.target_mask.sum())
     print(json.dumps(report, indent=2))

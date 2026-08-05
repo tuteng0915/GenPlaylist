@@ -32,6 +32,7 @@ from genplaylist_tokenizer import GenPlaylistTokenizer
 import utils  # 工具函数集合
 from dataset import AbstractDataset  # 抽象数据集类，负责加载原始数据
 from warmstart import apply_ddbc_warmstart
+from prepared_data import load_prepared_tokenized_dataset
 
 
 # ============ HuggingFace Dataset包装器 ============
@@ -569,7 +570,15 @@ def main(config):
   #   tokenized_datasets = tokenizer.raw_tokenize(split_datasets)
 
   # elif config['cir'] == 1: # 不将物品转换为组件，一个物品对应一个token序列
-  tokenized_datasets = tokenizer.tokenize(split_datasets)
+  prepared_path = config.get('prepared_dataset_path', None)
+  if prepared_path:
+    tokenized_datasets, prepared_manifest = load_prepared_tokenized_dataset(
+        prepared_path, config, dataset, tokenizer)
+    logger.info(
+        f"Loaded prepared dataset {prepared_manifest['prepared_data_version']} "
+        f"from {prepared_path}")
+  else:
+    tokenized_datasets = tokenizer.tokenize(split_datasets)
 
   # else: # cir为其他值（如3、5、10、15），将多个物品组合为一个组件
     # tokenized_datasets = tokenizer.transfor_tokenzie(split_datasets)

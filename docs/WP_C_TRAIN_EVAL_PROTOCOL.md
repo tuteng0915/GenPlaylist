@@ -79,3 +79,25 @@ catalog metadata may live under `GENPLAYLIST_DATA_ROOT` while generated
 `item_id_to_row.json`, semantic IDs, catalog embeddings, and RVQ weights live
 under `GENPLAYLIST_ARTIFACT_ROOT`; `scripts/train_spotify.sh` passes all four
 artifact paths explicitly.
+
+Prepare all checkpoint-independent data once before training:
+
+```bash
+conda run -n music python scripts/prepare_wp_c_data.py \
+  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v1-16item-15to5
+
+conda run -n music python scripts/validate_wp_c_prepared_data.py \
+  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
+  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v1-16item-15to5
+```
+
+The versioned output contains raw and tokenized Arrow `DatasetDict`s, normalized
+catalog CLHE and RVQ-reconstruction matrices, semantic/cue matrices, full legal
+type masks, and every checkpoint-independent 15->5 test tensor. Its manifest
+pins source, preparation-code, and output hashes. The validator rechecks all 47
+files, representative fresh tokenizations, batch shapes/masks, catalog alignment,
+and every vector identity. `train_spotify.sh` loads this cache by default and
+fails rather than silently recomputing if it is absent or stale.

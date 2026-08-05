@@ -210,6 +210,20 @@ Before a long run, use Hydra overrides for a one-batch smoke test and confirm:
 - loss is finite;
 - generated clean tokens obey their position-specific ranges.
 
+Prepare the frozen Arrow datasets and checkpoint-independent evaluation vectors
+once before launching training:
+
+```bash
+conda run -n music python scripts/prepare_wp_c_data.py \
+  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --artifact-dir data/dataset \
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v1-16item-15to5
+```
+
+`train_spotify.sh` resolves that directory from `GENPLAYLIST_DATA_ROOT` by
+default. Override it with `GENPLAYLIST_PREPARED_DATA_ROOT` only when using a
+separately versioned cache.
+
 ## 6. Live pipeline adapter
 
 The bundled coordinator runtime needs only the new checkpoint path:

@@ -140,7 +140,10 @@ item_id_to_row_path: null
 semantic_tokens_path: null
 codebook_weights_path: null
 item2cues_path: null
+cue_vocab_path: null
 cue_manifest_path: null
+# Optional offline cache produced by scripts/prepare_wp_c_data.py.
+prepared_dataset_path: null
 # WP-B stores 16 ranked candidates per song; the v1 token layout consumes the
 # first 8. Changing this requires a new token layout and a separately trained model.
 active_cue_tokens: 8

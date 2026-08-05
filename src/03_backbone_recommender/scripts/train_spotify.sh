@@ -11,6 +11,14 @@ TRAIN_MODE="${GENPLAYLIST_TRAIN_MODE:-warmstart}"
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
 WARMSTART_CKPT="${GENPLAYLIST_WARMSTART_CKPT:-$REPO_ROOT/checkpoints/pretrained/ddbc/spotify30.ckpt}"
+DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v1-16item-15to5"
+PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
+
+if [[ ! -f "$PREPARED_DATA_ROOT/prepared_manifest.json" ]]; then
+  echo "Missing prepared WP-C data: $PREPARED_DATA_ROOT/prepared_manifest.json" >&2
+  echo "Run scripts/prepare_wp_c_data.py before training." >&2
+  exit 1
+fi
 
 case "$TRAIN_MODE" in
   warmstart)
@@ -55,7 +63,11 @@ python main.py \
   item_id_to_row_path="$ARTIFACT_ROOT/item_id_to_row.json" \
   semantic_tokens_path="$ARTIFACT_ROOT/semantic_tokens.json" \
   codebook_weights_path="$ARTIFACT_ROOT/rvq_codebook_weights.npy" \
-  run_name=${RUN_NAME} \
+  item2cues_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/item2cues.json" \
+  cue_vocab_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_vocab.json" \
+  cue_manifest_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_manifest.json" \
+  prepared_dataset_path="$PREPARED_DATA_ROOT" \
+  +run_name=${RUN_NAME} \
   parameterization=subs \
   eval.compute_generative_perplexity=False \
   sampling.steps=25 \
