@@ -1,2 +1,4 @@
 _target_: lightning.pytorch.strategies.DDPStrategy
-find_unused_parameters: false  # TODO(yair): this seems hacky, I think if things are correct we shouldn't need this
+# CFG-only parameters (for example context_map) are intentionally inactive when
+# sampling.cfg_enabled=false, so DDP must tolerate them during backbone SFT.
+find_unused_parameters: true
