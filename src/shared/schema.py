@@ -12,8 +12,9 @@ import sys
 from pathlib import Path
 
 _LEGACY_SCHEMA_DIR = Path(__file__).resolve().parents[1] / "00_data_schema"
-if str(_LEGACY_SCHEMA_DIR) not in sys.path:
-    sys.path.insert(0, str(_LEGACY_SCHEMA_DIR))
+if str(_LEGACY_SCHEMA_DIR) in sys.path:
+    sys.path.remove(str(_LEGACY_SCHEMA_DIR))
+sys.path.insert(0, str(_LEGACY_SCHEMA_DIR))
 
 from schema import (  # noqa: E402,F401
     BOI_TOKEN,

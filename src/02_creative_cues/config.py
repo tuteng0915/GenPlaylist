@@ -6,7 +6,8 @@ setting changes, instead of adding a new flag.
 
 The DEFAULT preset is the cross-WP production contract.  Experimental settings
 remain available as explicitly named presets, but must never silently become
-the artifacts consumed by WP-D.
+the artifacts consumed by WP-C. The manifest key ``wp_d_compatible`` retains
+its legacy name for artifact backward compatibility.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ class ProductionConfig:
     rank_by: str = "idf"                # stage-5 vocabulary selection rule
     vocab_size: int = CUE_VOCAB_SIZE    # 2048; do not change without 00_data_schema sign-off
 
-    # Step 3 — assignment. Store a ranked master list; WP-D consumes its first
+    # Step 3 — assignment. Store a ranked master list; WP-C consumes its first
     # CUE_TOKENS entries so cue-count ablations never rebuild the mapping.
     num_cues: int = CUE_CANDIDATES_PER_ITEM
     active_cues: int = CUE_TOKENS

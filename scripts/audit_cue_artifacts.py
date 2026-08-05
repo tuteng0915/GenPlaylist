@@ -7,7 +7,15 @@ import argparse
 import collections
 import hashlib
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 
 
 def _load(path: Path):
@@ -18,7 +26,36 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def audit(cue_dir: Path) -> dict:
+def _audit_test_windows(mapping: dict, test_split: Path) -> dict:
+    eligible = 0
+    reference_items = 0
+    target_items = 0
+    missing: set[str] = set()
+    with test_split.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            fields = [value.strip() for value in raw.strip().split(",")]
+            if len(fields) <= FROZEN_NEXT_SONG_PROTOCOL.eval_total_items:
+                continue
+            songs = fields[1:]
+            if len(songs) < FROZEN_NEXT_SONG_PROTOCOL.eval_total_items:
+                continue
+            references, targets = FROZEN_NEXT_SONG_PROTOCOL.split_evaluation_items(songs)
+            eligible += 1
+            reference_items += len(references)
+            target_items += len(targets)
+            missing.update(item_id for item_id in [*references, *targets]
+                           if item_id not in mapping)
+    return {
+        "test_split": str(test_split.resolve()),
+        "eligible_playlists": eligible,
+        "reference_slots": reference_items,
+        "target_slots": target_items,
+        "missing_item_count": len(missing),
+        "missing_items": sorted(missing)[:25],
+    }
+
+
+def audit(cue_dir: Path, test_split: Path | None = None) -> dict:
     vocab_path = cue_dir / "cue_vocab.json"
     mapping_path = cue_dir / "item2cues.json"
     scores_path = cue_dir / "item2cue_scores.json"
@@ -70,7 +107,7 @@ def audit(cue_dir: Path) -> dict:
          "item_fraction": round(count / len(mapping), 6)}
         for cue_id, count in counts.most_common(50) if cue_id != 0
     ][:25]
-    return {
+    report = {
         "cue_dir": str(cue_dir.resolve()),
         "cue_vocab_sha256": _sha256(vocab_path),
         "item2cues_sha256": _sha256(mapping_path),
@@ -89,14 +126,21 @@ def audit(cue_dir: Path) -> dict:
         "score_shape_mismatches": score_shape_mismatches,
         "top_assigned_cues": top,
     }
+    if test_split is not None:
+        report["frozen_15_to_5_coverage"] = _audit_test_windows(
+            mapping, test_split)
+    return report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cue_dir", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--test-split", type=Path,
+        help="Also verify cue coverage for every first-20 15->5 evaluation window")
     args = parser.parse_args()
-    report = audit(args.cue_dir)
+    report = audit(args.cue_dir, test_split=args.test_split)
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

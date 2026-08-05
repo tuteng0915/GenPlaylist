@@ -3,13 +3,14 @@
 Protocol
 --------
 For each test playlist:
-  1. Keep only songs present in the catalog (96.6% retention).
-  2. Split: first ceil(N/2) songs = query context, remaining = ground truth.
-  3. For each encoder:
+  1. Require every song to be present in the frozen catalog.
+  2. Keep playlists with at least 20 songs and retain the first 20.
+  3. Split: songs 1-15 = query context, songs 16-20 = ground truth.
+  4. For each encoder:
        - Compute query embedding = L2-normalised centroid of query songs' embeddings.
        - Retrieve top-K from full catalog, excluding query songs.
        - Compute Recall@K = |retrieved ∩ ground_truth| / |ground_truth|.
-  4. Report mean Recall@K and mean Precision@K across all playlists for K ∈ {5,10,20,50}.
+  5. Report mean Recall@K and mean Precision@K across all playlists for K ∈ {5,10,20,50}.
 
 Encoders evaluated
 ------------------
@@ -27,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 from pathlib import Path
@@ -36,6 +36,11 @@ import numpy as np
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..'))
+SRC_ROOT = os.path.join(PROJECT_ROOT, 'src')
+if SRC_ROOT not in sys.path:
+    sys.path.insert(0, SRC_ROOT)
+
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 
 DATA_DIR     = os.path.join(PROJECT_ROOT, 'data', 'dataset')
 AUDIO_DIR    = os.path.join(PROJECT_ROOT, 'data', 'audio')
@@ -76,7 +81,7 @@ EMBS = {
 }
 
 K_VALUES = [5, 10, 20, 50]
-OUT_PATH = os.path.join(SCRIPT_DIR, 'outputs', 'recall_eval.json')
+OUT_PATH = os.path.join(SCRIPT_DIR, 'outputs', 'recall_eval_15to5.json')
 
 
 # ---------------------------------------------------------------------------
@@ -84,25 +89,27 @@ OUT_PATH = os.path.join(SCRIPT_DIR, 'outputs', 'recall_eval.json')
 # ---------------------------------------------------------------------------
 
 def load_test_playlists(path: str, catalog_ids: set[str]) -> list[list[str]]:
-    """Load test.txt — each line is a comma-separated list of song IDs."""
+    """Load catalog-aligned test rows that satisfy the frozen 20-song window."""
     playlists = []
-    with open(path) as f:
-        for line in f:
-            songs = [s.strip() for s in line.strip().split(',') if s.strip()]
-            valid = [s for s in songs if s in catalog_ids]
-            if len(valid) >= 4:   # need at least 2 query + 2 ground-truth
-                playlists.append(valid)
+    with open(path, encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            fields = [value.strip() for value in line.strip().split(',') if value.strip()]
+            if not fields:
+                continue
+            songs = fields[1:]  # first field is the playlist ID
+            unknown = [item_id for item_id in songs if item_id not in catalog_ids]
+            if unknown:
+                raise ValueError(
+                    f"{path}:{line_no}: item IDs missing from catalog: {unknown[:5]}")
+            if len(songs) >= FROZEN_NEXT_SONG_PROTOCOL.eval_total_items:
+                references, targets = FROZEN_NEXT_SONG_PROTOCOL.split_evaluation_items(songs)
+                playlists.append([*references, *targets])
     return playlists
 
 
-def split_playlist(songs: list[str], query_frac: float = 0.5) -> tuple[list[str], list[str]]:
-    """Split into query (first query_frac) and ground truth (rest).
-
-    query_frac=0.5 → 50/50 (default), 0.3 → 30/70, 0.7 → 70/30.
-    Always keeps at least 1 song in each half.
-    """
-    n_query = max(1, min(len(songs) - 1, math.ceil(len(songs) * query_frac)))
-    return songs[:n_query], songs[n_query:]
+def split_playlist(songs: list[str]) -> tuple[list[str], list[str]]:
+    """Apply the immutable first-20, 15-reference/5-target split."""
+    return FROZEN_NEXT_SONG_PROTOCOL.split_evaluation_items(songs)
 
 
 def centroid_embedding(
@@ -169,9 +176,7 @@ def reciprocal_rank(retrieved: list[str], ground_truth: set[str]) -> float:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--n-playlists', type=int, default=None,
-                        help='Evaluate on first N test playlists (default: all 658)')
-    parser.add_argument('--query-frac', type=float, default=0.5,
-                        help='Fraction of playlist used as query context (0.3, 0.5, 0.7)')
+                        help='Evaluate on first N eligible test playlists (default: all 468)')
     parser.add_argument('--out-suffix', type=str, default='',
                         help='Suffix appended to output filename (e.g. "_split30")')
     args = parser.parse_args()
@@ -230,7 +235,7 @@ def main():
         skipped   = 0
 
         for pl in playlists:
-            query_songs, gt_songs = split_playlist(pl, args.query_frac)
+            query_songs, gt_songs = split_playlist(pl)
             gt_set = set(gt_songs)
             exclude = set(query_songs)
 
@@ -251,12 +256,14 @@ def main():
         results[enc_name] = {
             'n_playlists': n_eval,
             'skipped': skipped,
-            'query_frac': args.query_frac,
+            'protocol': 'first20_15ref_5target',
+            'reference_items': FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items,
+            'target_items': FROZEN_NEXT_SONG_PROTOCOL.eval_target_items,
             'recall':    {k: float(np.mean(v)) for k, v in recall.items()},
             'precision': {k: float(np.mean(v)) for k, v in precision.items()},
             'mrr':       float(np.mean(rr_list)) if rr_list else 0.0,
         }
-        print(f"\n[{enc_name}]  n={n_eval}  (query_frac={args.query_frac})")
+        print(f"\n[{enc_name}]  n={n_eval}  (15 references -> 5 targets)")
         print(f"  {'K':>4}  {'Recall@K':>10}  {'Precision@K':>12}")
         for k in K_VALUES:
             r = results[enc_name]['recall'][k]

@@ -18,10 +18,10 @@ Full pipeline (paper §4):
       ▼  backbone_recommender diffusion model              [backbone_recommender]
     z_hat_emb  (next-item CLHE embedding)
       │
-      ▼  verbalization.verbalize(GeneratedItem, ...)       [04_synthesis / WP-C]
+      ▼  verbalization.verbalize(GeneratedItem, ...)       [04_synthesis / WP-D]
     music_attributes + lyric_draft
       │
-      ▼  synthesis.synthesize()                            [04_synthesis / WP-C]
+      ▼  synthesis.synthesize()                            [04_synthesis / WP-D]
     audio_path
       │
       ▼  SynthesisResult
@@ -110,7 +110,7 @@ def _import_from(rel_dir: str, module_name: str):
 
 
 # ---------------------------------------------------------------------------
-# Backbone inference (WP-D)
+# Backbone inference (WP-C)
 # ---------------------------------------------------------------------------
 
 def _run_backbone(
@@ -120,7 +120,7 @@ def _run_backbone(
     catalog_metadata: list[CatalogItem],
     item_id_to_row: dict[str, int],
 ) -> list[GeneratedItem]:
-    """Run the configured WP-D inference adapter.
+    """Run the configured WP-C inference adapter.
 
     The bundled runtime loads ``GENPLAYLIST_BACKBONE_CKPT`` lazily. Advanced
     deployments may replace it with ``GENPLAYLIST_BACKBONE_RUNNER=module:function``.
@@ -262,7 +262,7 @@ def generate_next_song(
 
 
 class GenPlaylistPipeline:
-    """Reusable WP-A → WP-D → WP-C next-song pipeline.
+    """Reusable WP-A → WP-C → WP-D next-song pipeline.
 
     Catalog artifacts are loaded and validated once. Heavy DDBC and ACE-Step
     models remain lazy inside their adapters, so constructing this object does
@@ -401,7 +401,7 @@ class GenPlaylistPipeline:
                 text_encoder=text_encoder or self.text_encoder,
             )
         # A reference query and a creative instruction are different signals.
-        # Only the explicit instruction is forwarded into WP-C prompts.
+        # Only the explicit instruction is forwarded into WP-D prompts.
         context.raw_input = user_instruction.strip()
         return context.validate()
 
@@ -419,7 +419,7 @@ class GenPlaylistPipeline:
         synthesizer: Callable | None = None,
         synthesis_output_dir: str | None = None,
     ) -> SynthesisResult:
-        """Run WP-A → DDBC full-mask inference → WP-C → ACE-Step."""
+        """Run WP-A → WP-C DDBC full-mask inference → WP-D → ACE-Step."""
         context = self.normalize_references(
             user_input,
             reference_count=reference_count,

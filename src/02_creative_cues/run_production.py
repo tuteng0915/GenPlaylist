@@ -59,7 +59,7 @@ def main():
                     help="override the preset's cache setting; re-extract/re-clean from scratch")
     ap.add_argument("--vocab-size", type=int, default=None,
                     help="override the preset's vocab_size (default from config.py preset, "
-                         "normally CUE_VOCAB_SIZE=2048 — the WP-D schema contract). A different "
+                         "normally CUE_VOCAB_SIZE=2048 — the WP-C schema contract). A different "
                          "value still runs and exports fine, but CueMappingEntry.validate()/"
                          "load_mapping() must be called with a matching vocab_size to read the "
                          "resulting cue_vocab.json/item2cues.json back correctly.")
@@ -82,7 +82,7 @@ def main():
             print(f"[production] WARNING: --vocab-size={args.vocab_size} overrides the "
                   f"CUE_VOCAB_SIZE={cue_config.CUE_VOCAB_SIZE} schema contract; the resulting "
                   f"cue_vocab.json/item2cues.json need load_mapping(path, "
-                  f"vocab_size={args.vocab_size}) to validate/read back, and WP-D expects "
+                  f"vocab_size={args.vocab_size}) to validate/read back, and WP-C expects "
                   f"exactly {cue_config.CUE_VOCAB_SIZE}.")
 
     print(f"[production] preset={args.config} -> {cfg}")

@@ -49,6 +49,15 @@ A valid next song should be compatible with the reference structure while remain
 
 **Lyric & attribute generation** (§4.5): The LLM produces one attribute set A = {genre, mood, tempo, instrumentation, key, language} and one lyric draft L following ACE-Step markup. ACE-Step then synthesizes the next-song audio.
 
+**Frozen training/evaluation protocol:** Training expands every chronological
+playlist prefix into at most 15 references and one next-item target. Evaluation
+keeps the first 20 songs of every eligible test playlist, uses songs 1–15 as
+references and songs 16–20 as five ground-truth futures, then independently
+samples the next-one DDBC slot five times. The two five-item sets are compared
+with full-catalog retrieval and order-free Hungarian matching. Samples are not
+autoregressively fed back. The WP-D demo remains singular and is not changed by
+this offline protocol.
+
 ---
 
 ## Key Figures
@@ -81,7 +90,10 @@ All result cells are redacted in this draft. Planned comparison groups:
 | Generative (no DDBC next-item plan) | MusicGen-Text, ACE-Step-LLM |
 | GenPlaylist ablations | w/o disp., w/o verbal., **Full** |
 
-Evaluation: FAD↓ (audio quality), CLAP↑ (lyric/attribute adherence), human Coherence/Quality/Overall↑. Also: Dispersion Match Δσ²↓ and Centroid Distance CD↓ (structural metrics, ablation only).
+WP-C evaluation reports optimal 5x5 CLHE cosine, exact multiset recall/precision/F1,
+any-hit, and unique ratio. Later WP-D audio evaluation reports FAD↓, CLAP↑, and
+human Coherence/Quality/Overall↑, with Dispersion Match Δσ²↓ and Centroid
+Distance CD↓ as structural analyses.
 
 ---
 

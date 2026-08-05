@@ -42,7 +42,7 @@ The versioned directory also contains `item_cues.tsv`, `cue_manifest.json`,
 - No invalid cue IDs, duplicate non-UNK IDs within a row, or `<unk>` slots.
 - No relevance-order violations and no score-shape mismatches.
 - 1,683 / 2,047 non-UNK vocabulary entries are used (82.22%).
-- WP-D reads only `cue_ids[:8]`, so the token stride remains 13 per item.
+- WP-C reads only `cue_ids[:8]`, so the token stride remains 13 per item.
 - Official `spotify30.ckpt` warm-start and a target-only CPU backward pass both pass.
 
 ## Known vocabulary-quality limitations

@@ -2,7 +2,7 @@
 
 For each extraction method:
     extract raw cues -> normalize vocab -> assign N cues/song -> export -> evaluate
-    (N = --num-cues, default CUE_TOKENS=8, the WP-D schema contract)
+    (N = --num-cues; production stores 16 and WP-C activates the first 8)
 
 Then writes one comparison report:
     src/02_creative_cues/outputs/runs/<run_id>/comparison_report.md
@@ -204,12 +204,12 @@ def main():
                     help="seed for the --held-out-eval item split")
     ap.add_argument("--num-cues", type=int, default=CUE_TOKENS,
                     help=f"cues assigned per song (default {CUE_TOKENS}, the CUE_TOKENS schema "
-                         "contract WP-D expects). A different value still runs, validates, and "
+                         "contract WP-C expects). A different value still runs, validates, and "
                          "exports item2cues.json fine, but CueMappingEntry.load_mapping() must "
                          "be called with a matching n_cues to read a non-default file back.")
     ap.add_argument("--vocab-size", type=int, default=CUE_VOCAB_SIZE,
                     help=f"total vocab entries incl. <unk> (default {CUE_VOCAB_SIZE}, the "
-                         "CUE_VOCAB_SIZE schema contract WP-D expects). A different value still "
+                         "CUE_VOCAB_SIZE schema contract WP-C expects). A different value still "
                          "runs, validates, and exports fine, but CueMappingEntry.validate()/"
                          "load_mapping() must be called with a matching vocab_size to read a "
                          "non-default file back without falsely rejecting in-range cue IDs.")
@@ -253,13 +253,13 @@ def main():
     if args.num_cues != CUE_TOKENS:
         print(f"[compare] WARNING: --num-cues={args.num_cues} overrides the CUE_TOKENS="
               f"{CUE_TOKENS} schema contract; item2cues.json from this run needs "
-              f"load_mapping(path, n_cues={args.num_cues}) to read back, and WP-D expects "
+              f"load_mapping(path, n_cues={args.num_cues}) to read back, and WP-C expects "
               f"exactly {CUE_TOKENS}.")
     if args.vocab_size != CUE_VOCAB_SIZE:
         print(f"[compare] WARNING: --vocab-size={args.vocab_size} overrides the CUE_VOCAB_SIZE="
               f"{CUE_VOCAB_SIZE} schema contract; cue_vocab.json/item2cues.json from this run "
               f"need load_mapping(path, vocab_size={args.vocab_size}) to validate/read back, and "
-              f"WP-D expects exactly {CUE_VOCAB_SIZE}.")
+              f"WP-C expects exactly {CUE_VOCAB_SIZE}.")
 
     # --held-out-eval: vocabulary is built from train_items only; evaluation (below) is
     # restricted to test_items so every reported metric reflects generalization to songs

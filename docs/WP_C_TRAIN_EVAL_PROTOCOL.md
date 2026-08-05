@@ -1,4 +1,22 @@
-# WP-C frozen train/evaluation protocol
+# Frozen next-song training and evaluation protocol
+
+This is the authoritative GenPlaylist-v1 experimental contract shared by
+WP-A, WP-B, and WP-C. Machine-readable values are defined once in
+`src/shared/protocol.py`; WP-C rejects Hydra overrides that drift from them.
+
+| Setting | Frozen value |
+|---|---:|
+| Minimum training references | 2 |
+| Maximum training references | 15 |
+| Training items including target | 16 |
+| Test window | first 20 songs |
+| Test references | songs 1–15 |
+| Test ground truth | songs 16–20 |
+| Independent next-one samples | 5 |
+| Active cues per song | first 8 of 16 stored |
+
+WP-D synthesis/demo is explicitly excluded from this change. Its production UI
+continues to generate and present one next song; no WP-D demo source is modified.
 
 ## Training
 
@@ -23,12 +41,33 @@
   ground-truth future songs.
 - Run the next-one full-MASK sampler independently five times from the unchanged
   15-song context.  Generated songs are not autoregressively fed back.
-- Compute a 5x5 cosine-similarity matrix between generated and ground-truth CLHE
+- Retrieve each generated RVQ prediction against the complete 5,119-song catalog,
+  compute a 5x5 cosine-similarity matrix between retrieved and ground-truth CLHE
   representations, then use Hungarian assignment for the optimal one-to-one,
   order-free match.
 - Report optimal matched cosine, multiset exact matches, recall, precision, F1,
   any-hit rate, and prediction unique ratio.  Duplicate generations cannot earn
   repeated credit for a single ground-truth item.
+
+## Cross-WP responsibilities
+
+- **WP-A:** its retrieval evaluation uses the same first-20, 15-reference,
+  5-target split. The previous configurable 50/50 split is retired.
+- **WP-B:** every reference and target item must resolve to the frozen 16-cue
+  ranked table; WP-C consumes only positions 1–8. Cue mining never reads whether
+  an item is a reference or target, preventing split-role leakage.
+- **WP-C:** expands training prefixes, enforces the 210-token maximum, performs
+  five independent full-mask next-one draws, full-catalog retrieval, and 5x5
+  matching metrics.
+- **WP-D demo:** unchanged until a separate demo decision is made.
+
+## Reproducibility rules
+
+- Preserve playlist order and take the first 20; do not random-crop test rows.
+- Do not feed any sampled prediction back into the 15-song context.
+- Do not use adjacent-swap augmentation.
+- Do not change one of the frozen numbers independently. A new setting requires
+  a new named protocol/version rather than silently editing GenPlaylist-v1.
 
 ## Server run note
 

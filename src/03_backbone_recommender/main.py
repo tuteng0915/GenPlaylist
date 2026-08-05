@@ -28,6 +28,7 @@ from safetensors.torch import load_file  # 安全的模型权重加载库
 import dataloader  # 数据加载模块，负责数据预处理和批量加载
 import diffusion  # 扩散模型核心模块，定义了扩散过程和模型结构
 from evaluator import Evaluator  # 评估器，计算推荐指标（recall、precision等）
+from genplaylist_tokenizer import GenPlaylistTokenizer
 import utils  # 工具函数集合
 from dataset import AbstractDataset  # 抽象数据集类，负责加载原始数据
 from warmstart import apply_ddbc_warmstart
@@ -555,6 +556,12 @@ def main(config):
   # 分词器负责将bundle转换为token序列
   # 使用RQ-VAE将物品嵌入向量量化为离散码本索引
   tokenizer = dataloader.get_tokenizer(config, dataset)
+  if isinstance(tokenizer, GenPlaylistTokenizer):
+    expected_length = tokenizer.max_token_seq_len
+    if int(config.model.length) != expected_length:
+      raise ValueError(
+          f"Frozen GenPlaylist model.length is {expected_length}, "
+          f"got {config.model.length}")
 
   # ============ 第3步：对数据集进行分词 ============
   # 根据cir（components-to-items ratio）参数选择不同的分词策略：

@@ -14,7 +14,7 @@ It is the per-song CLHE table for the current frozen catalog:
 
 There are 5,119 catalog entries but only 5,077 unique items in the playlist
 splits. Keeping all 5,119 rows is intentional: WP-A retrieval and the demo use
-the full catalog, while WP-D training uses the split subset.
+the full catalog, while WP-C training uses the split subset.
 
 Do not use `clhe_weight.npy` as this file. The expected legacy meanings are:
 
@@ -144,7 +144,9 @@ python src/02_creative_cues/run_production.py --config default
 
 The required files are written to
 `src/02_creative_cues/outputs/production/latest/`. Its `cue_manifest.json` must
-say `wp_d_compatible: true`, `cues_per_item: 8`, and `cue_vocab_size: 2048`.
+retain the legacy field `wp_d_compatible: true`, declare
+`stored_cues_per_item: 16`, `default_active_cues: 8`, and
+`cue_vocab_size: 2048`.
 
 ## 4. Run the fail-fast preflight
 
@@ -195,9 +197,11 @@ conda run -n music python scripts/check_ddbc_warmstart.py --backward-smoke
 
 The default Spotify configuration now selects `GenPlaylistTokenizer`, reads the
 canonical data directory, uses a 13-token stride, and conditions DiT on
-`mu_c`/`sigma_c2`. For each playlist, all songs except the last are ordered
-references and the last song is the only next-item target; records with fewer
-than two references plus one target are filtered out.
+`mu_c`/`sigma_c2`. Training expands every chronological prefix into at most 15
+recent references plus one next-item target (16 songs total). Evaluation keeps
+only test playlists with at least 20 songs, takes the first 20, uses songs 1–15
+as references and songs 16–20 as targets, and draws the same next-one slot five
+times for 5x5 matching. `src/shared/protocol.py` rejects configuration drift.
 
 Before a long run, use Hydra overrides for a one-batch smoke test and confirm:
 
@@ -274,6 +278,6 @@ python src/pipeline/run.py \
   --instruction 'one next song with a smooth nocturnal transition'
 ```
 
-The command runs WP-A reference normalization, DDBC full-mask next-item
-completion, WP-C verbalization, and ACE-Step synthesis, then prints the output
+The command runs WP-A reference normalization, WP-C DDBC full-mask next-item
+completion, WP-D verbalization, and ACE-Step synthesis, then prints the output
 audio path and generation metadata as JSON.

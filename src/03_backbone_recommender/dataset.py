@@ -8,12 +8,19 @@ them as strings; conversion to embedding rows happens only through the shared
 from __future__ import annotations
 
 import json
+import sys
 from logging import getLogger
 from pathlib import Path
 
+_SRC = Path(__file__).resolve().parents[1]
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL  # noqa: E402
+
 try:
     from datasets import Dataset
-except ImportError:  # lets lightweight schema/parser checks run without WP-D extras
+except ImportError:  # lets lightweight schema/parser checks run without WP-C extras
     Dataset = None
 
 
@@ -36,12 +43,12 @@ def read_split_file(path: str | Path) -> list[tuple[str, list[str]]]:
 
 
 class AbstractDataset:
-    """Compatibility wrapper consumed by the existing WP-D training entry point."""
+    """Compatibility wrapper consumed by the WP-C training entry point."""
 
     def __init__(self, config: dict):
         if Dataset is None:
             raise RuntimeError(
-                "WP-D requires the 'datasets' package; install requirements.txt")
+                "WP-C requires the 'datasets' package; install requirements.txt")
         self.config = config
         self.logger = getLogger()
         repo_root = Path(__file__).resolve().parents[2]
@@ -115,16 +122,8 @@ class AbstractDataset:
         """
         records = self._records_for_split(file_name)
         output: list[tuple[str, list[str]]] = []
-        protocol = self.config.get("protocol", {})
-        min_references = int(protocol.get("min_reference_items", 2))
-        eval_references = int(protocol.get("eval_reference_items", 15))
-        eval_targets = int(protocol.get("eval_target_items", 5))
-        eval_total = eval_references + eval_targets
-        configured_eval_total = int(protocol.get("eval_total_items", eval_total))
-        if configured_eval_total != eval_total:
-            raise ValueError(
-                "protocol.eval_total_items must equal eval_reference_items + "
-                f"eval_target_items ({eval_total}), got {configured_eval_total}")
+        protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
+        min_references = protocol.min_reference_items
         if seq_len < min_references + 1:
             raise ValueError(
                 f"seq_len={seq_len} cannot hold {min_references} references and one target")
@@ -139,8 +138,9 @@ class AbstractDataset:
                     example = item_ids[context_start:target_index + 1]
                     output.append((f"{playlist_id}:next:{target_index}", example))
             elif file_name == "test":
-                if len(item_ids) >= configured_eval_total:
-                    output.append((playlist_id, item_ids[:configured_eval_total]))
+                if len(item_ids) >= protocol.eval_total_items:
+                    references, targets = protocol.split_evaluation_items(item_ids)
+                    output.append((playlist_id, [*references, *targets]))
             elif len(item_ids) >= min_references + 1:
                 # Validation remains next-one: use the most recent bounded
                 # context and final item, without creating correlated windows.

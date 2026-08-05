@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ordered catalog item IDs; at least two are required")
     parser.add_argument(
         "--instruction", default="",
-        help="Optional creative instruction forwarded to WP-C")
+        help="Optional creative instruction forwarded to WP-D")
     parser.add_argument("--audio-duration", type=int, default=30)
     parser.add_argument("--k-neighbors", type=int, default=5)
     parser.add_argument(

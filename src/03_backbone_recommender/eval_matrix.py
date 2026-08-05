@@ -1,6 +1,6 @@
 """Corpus-level evaluation for generated vs ground-truth next songs.
 
-Implements the two encoder-based metrics kept for WP-D Part 4:
+Implements the two encoder-based metrics kept for WP-C offline evaluation:
 
   * CLAP_OAS  — Optimal Assignment Similarity. Cosine similarity matrix between
                 generated and ground-truth CLAP audio embeddings, solved as a

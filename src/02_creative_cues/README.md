@@ -68,8 +68,8 @@ preset, don't reach for a flag.
 | `tfidf` | `tfidf` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
 | `research-18-cues` | `llm` | `idf` | 18 | 5 | 100 | `dedup` |
 
-`default` is the WP-D-compatible production contract: a 2,048-entry cue
-vocabulary and a relevance-ranked **16-candidate table per song**. WP-D consumes
+`default` is the WP-C-compatible production contract: a 2,048-entry cue
+vocabulary and a relevance-ranked **16-candidate table per song**. WP-C consumes
 the first 8 candidates, so 4/8/12/16-cue ablations share one frozen table.
 `tfidf` keeps the same interface as an API-free baseline. `research-18-cues` is
 an ablation only and does not match the frozen 16-candidate artifact contract.
@@ -117,7 +117,7 @@ everywhere else in the pipeline.
 
 - `item_id` : string song ID (`"0"`, `"1"`, ...), matching the catalog's item IDs.
 - value     : relevance-ranked cue IDs (ints, each `0 <= id < vocab_size`,
-  indexing into `cue_vocab.json`). Length is **16** for production; WP-D uses
+  indexing into `cue_vocab.json`). Length is **16** for production; WP-C uses
   `cue_ids[:8]`. `<unk>` padding, if needed, appears only at the end.
 
 ```json
@@ -147,7 +147,7 @@ python src/02_creative_cues/run_production.py --limit 200
 # Build with tfidf instead of llm (no API cost)
 python src/02_creative_cues/run_production.py --config tfidf
 
-# Build the 18-cue research ablation (not WP-D compatible)
+# Build the 18-cue research ablation (not WP-C compatible)
 python src/02_creative_cues/run_production.py --config research-18-cues
 
 # Re-run from scratch, ignoring caches

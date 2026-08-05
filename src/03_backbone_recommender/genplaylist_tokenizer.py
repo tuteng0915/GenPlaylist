@@ -26,6 +26,7 @@ from shared.schema import (  # noqa: E402
     TOKEN_LAYOUT,
 )
 from shared.artifacts import validate_catalog_alignment  # noqa: E402
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class GenPlaylistTokenizer:
     @classmethod
     def from_dataset_config(cls, config, dataset) -> "GenPlaylistTokenizer":
         """Construct from the canonical repository artifacts named in config."""
+        FROZEN_NEXT_SONG_PROTOCOL.validate_config(config)
         data_root = Path(dataset.dir)
         repo_root = Path(__file__).resolve().parents[2]
         cue_root = repo_root / "src" / "02_creative_cues" / "outputs" / "production" / "latest"
@@ -147,7 +149,7 @@ class GenPlaylistTokenizer:
             "stored_cues_per_item", manifest.get("cues_per_item", 0)))
         if stored_cues < active_cues:
             raise ValueError(
-                f"Cue artifact stores {stored_cues} cues/item but WP-D needs the "
+                f"Cue artifact stores {stored_cues} cues/item but WP-C needs the "
                 f"first {active_cues}")
         manifest_active = int(manifest.get("default_active_cues", CUE_TOKENS))
         if manifest_active != CUE_TOKENS:
@@ -417,10 +419,10 @@ class GenPlaylistTokenizer:
             def encode_row(row):
                 item_ids = [str(item_id) for item_id in row["item_seq"]]
                 if split == "test":
-                    protocol = self.config.get("protocol", {})
-                    reference_count = int(protocol.get("eval_reference_items", 15))
-                    target_count = int(protocol.get("eval_target_items", 5))
-                    expected_count = reference_count + target_count
+                    protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
+                    reference_count = protocol.eval_reference_items
+                    target_count = protocol.eval_target_items
+                    expected_count = protocol.eval_total_items
                     if len(item_ids) != expected_count:
                         raise ValueError(
                             f"Test rows must contain exactly {expected_count} items for "

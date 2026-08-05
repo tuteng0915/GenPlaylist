@@ -16,7 +16,7 @@ Schema constants (do NOT change without coordinating with 00_data_schema)
 -------------------------------------------------------------------------
   CUE_VOCAB_SIZE = 2048    (index 0 = '<unk>')
   CUE_CANDIDATES_PER_ITEM = 16  (ranked master table width)
-  CUE_TOKENS              = 8   (default prefix consumed by WP-D)
+  CUE_TOKENS              = 8   (default prefix consumed by WP-C)
 """
 
 from __future__ import annotations

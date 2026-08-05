@@ -1,4 +1,4 @@
-"""Checkpoint-backed WP-D adapter used by ``pipeline.genplaylist``.
+"""Checkpoint-backed WP-C adapter used by ``pipeline.genplaylist``.
 
 All heavyweight imports and model loading are lazy. Local development can
 therefore import the full pipeline without PyTorch, CUDA, or a checkpoint.
@@ -65,7 +65,7 @@ def _load_runtime(catalog_items, catalog_embs, item_id_to_row):
     try:
         import torch
     except ImportError as exc:
-        raise RuntimeError("The WP-D runtime requires PyTorch") from exc
+        raise RuntimeError("The WP-C runtime requires PyTorch") from exc
     from diffusion import Diffusion
 
     config = _compose_config(torch)

@@ -1,7 +1,7 @@
 """00_data_schema/test_schema.py — Smoke tests for all schema dataclasses.
 
-Tests are grounded in the CURRENT backbone config:
-  rq_n_codebooks=3, rq_codebook_size=256, no creative cues.
+Tests are grounded in the frozen backbone config:
+  rq_n_codebooks=3, rq_codebook_size=256, 16 stored / 8 active cues.
 
 Run from repo root:
     python src/00_data_schema/test_schema.py

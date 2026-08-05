@@ -108,7 +108,7 @@ def main():
     ap.add_argument("--rank-by", default="idf")
     ap.add_argument("--num-cues", type=int, default=18,
                     help="cues/song (default 18, matching the production preset that surfaced "
-                         "this issue — not the WP-D schema default of 6)")
+                         "this issue — not the WP-C backbone contract)")
     ap.add_argument("--vocab-size", type=int, default=2048)
     ap.add_argument("--lyrics-mode", default="dedup", choices=list(cue_lyrics.MODES))
     ap.add_argument("--lyrics-cap", type=int, default=2000)

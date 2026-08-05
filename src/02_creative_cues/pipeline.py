@@ -51,7 +51,7 @@ def finish_from_raw(
 
     dedup_threshold: cosine above which two cues are merged in semantic dedup
                      (higher = fewer merges = larger vocabulary).
-    num_cues: ranked candidates stored per song. Production stores 16 and WP-D
+    num_cues: ranked candidates stored per song. Production stores 16 and WP-C
               consumes the first 8; experimental values still validate when
               readers are told the matching stored width.
     embedder: sentence-transformers model (or a cue_normalize.EMBEDDER_MODELS key)

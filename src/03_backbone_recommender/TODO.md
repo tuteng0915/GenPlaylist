@@ -1,4 +1,4 @@
-# WP-D — status and remaining TODO
+# WP-C — status and remaining TODO
 
 ## Implemented
 
@@ -13,7 +13,7 @@
 - [x] Select the new tokenizer in the Spotify training config and pad variable-length batches.
 - [x] Exclude padded positions from attention keys with an explicit sequence mask.
 - [x] Apply the per-position legal-token mask in the shared model forward path.
-- [x] Train with all preceding songs as references and the last song as the only target.
+- [x] Enforce the shared GenPlaylist-v1 protocol constants at data/tokenizer startup.
 - [x] Require at least two references and expose a fixed one-item production sampler.
 - [x] Freeze test rows to 20 songs: 15 references plus five future targets.
 - [x] Draw five independent full-MASK next-one samples from the same context.
@@ -24,7 +24,7 @@
 
 ## Remaining / training blockers
 
-- [ ] Run the verified checkpoint extractor and generate the final eight-cue artifacts on the server.
+- [x] Run the verified checkpoint extractor and generate the final 16-stored/8-active cue artifacts.
 - [x] Thread structure conditions through full-mask completion sampling.
 - [ ] Train a new checkpoint; old checkpoints are structurally incompatible.
 - [x] Implement a lazy checkpoint-backed `run_backbone` adapter.

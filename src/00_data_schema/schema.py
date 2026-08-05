@@ -10,11 +10,11 @@ raw user input
 lyrics / metadata
   ─[WP-B]──► CueMappingEntry        (02_creative_cues → 03_backbone_recommender tokenizer)
 CLHE embedding space
-  ─[WP-D]──► CatalogItem            (shared catalog metadata format used by all WPs)
+  ─[shared]► CatalogItem            (shared catalog metadata format used by all WPs)
 diffusion model output
-  ─[WP-D]──► GeneratedItem          (03_backbone_recommender → 04_synthesis)
+  ─[WP-C]──► GeneratedItem          (03_backbone_recommender → 04_synthesis)
 ACE-Step output
-  ─[WP-C]──► SynthesisResult        (04_synthesis → pipeline / evaluation / demo)
+  ─[WP-D]──► SynthesisResult        (04_synthesis → pipeline / evaluation / demo)
 
 Frozen GenPlaylist v1 contract
 ------------------------------
@@ -297,7 +297,7 @@ class CatalogItem:
 
 
 # ---------------------------------------------------------------------------
-# ContextPrefix  (WP-A → WP-D)
+# ContextPrefix  (WP-A → WP-C)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -316,7 +316,7 @@ class ContextPrefix:
     item_ids  : ordered list of opaque string item IDs, length K.
     source    : 'song_only' | 'text_only' | 'hybrid' | 'padded' | 'unknown'.
     raw_input : original user input string (for logging / debugging).
-    items     : optional CatalogItem list; used by WP-C verbalization for
+    items     : optional CatalogItem list; used by WP-D verbalization for
                 style_summary prompt (μ_C neighbors description).
     """
     item_ids: list[str]
@@ -345,7 +345,7 @@ class ContextPrefix:
 
 
 # ---------------------------------------------------------------------------
-# CueMappingEntry  (WP-B → WP-D)
+# CueMappingEntry  (WP-B → WP-C)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -376,7 +376,7 @@ class CueMappingEntry:
         pass the actual count for item2cues.json files produced with a non-default
         --num-cues (run_compare.py) so validation checks against the right length.
 
-        vocab_size: upper bound for cue_ids. Defaults to the CUE_VOCAB_SIZE=2048 WP-D
+        vocab_size: upper bound for cue_ids. Defaults to the CUE_VOCAB_SIZE=2048 WP-C
         contract; pass the actual value for files produced with a non-default
         --vocab-size so validation checks against the right bound instead of falsely
         rejecting in-range indices from a larger vocabulary."""
@@ -414,7 +414,7 @@ class CueMappingEntry:
 
 
 # ---------------------------------------------------------------------------
-# GeneratedItem  (WP-D → WP-C)
+# GeneratedItem  (WP-C → WP-D)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -484,7 +484,7 @@ class GeneratedItem:
 
 
 # ---------------------------------------------------------------------------
-# SynthesisResult  (WP-C → Demo / Evaluation)
+# SynthesisResult  (WP-D → Demo / Evaluation)
 # ---------------------------------------------------------------------------
 
 @dataclass

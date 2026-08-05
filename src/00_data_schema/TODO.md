@@ -8,6 +8,7 @@
 - [x] Require `item_id_to_row.json`; never infer a row with `int(item_id)`.
 - [x] Validate catalog/embedding/mapping alignment and reject codebooks used as item embeddings.
 - [x] Add `build_catalog_artifacts.py` and contract tests.
+- [x] Freeze shared 16-item training and first-20 15->5 evaluation constants.
 
 ## Remaining / blocked by artifacts
 

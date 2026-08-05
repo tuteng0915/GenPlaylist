@@ -23,7 +23,7 @@ Ordered references C = (m_1, ..., m_t), t ≥ 2
   │                                                                     │
   ├─ RVQ discretize ────────────────────────────────────────────────────┤
   │   E(m) → z(m) = (z1, z2, z3, z_conf)  [L=3, K=256, 1-indexed]     │
-  │   + assign 8 creative cue tokens per item  (WP-B)                  │
+  │   + store 16 ranked cues; activate first 8 per item (WP-B)         │
   │                                                                     │
   ├─ Dispersion-conditioned masked diffusion ───────────────────────────┤
   │   conditioning: reference tokens (fixed) + μ_C, σ²_C (injected)   │
@@ -123,13 +123,14 @@ This allows a single model to produce tight continuations (low σ²_C) or divers
 ### 3.3 Training
 
 - Reference tokens are **never masked** (fixed context), identical to DDBC.
-- The last song is the only target; all preceding songs are references.
+- Every chronological prefix becomes a next-one example with at most 15 recent
+  references and exactly one target (16 songs total).
 - Training samples require at least two references plus one target.
 - σ²_C and μ_C are computed from the reference items in each training batch.
 - Passed through `_forward_pass_diffusion` → `forward` → DIT.
 
 Inference uses the same full sequence layout as training. It appends one target
-slot whose ten payload positions are all MASK, then jointly reverse-denoises
+slot whose twelve payload positions are all MASK, then jointly reverse-denoises
 that completion mask. The legacy DDBC next-block/semi-AR loop is not used by
 the production next-song path.
 
@@ -188,17 +189,17 @@ Output: `cues_raw.json` — `{item_id: ["train platform", "old photo", "broken p
 
 Output: `creative_cues_vocab.json` — `{cue_text: cue_id}` (2048 entries)
 
-**Step 4 — Per-item assignment (K=8)**
+**Step 4 — Per-item assignment (16 stored / 8 active)**
 
 ```python
 for each item:
     raw_cues → nearest vocab entry (sentence-BERT cosine)
     → sort by PMI(cue, item)
     → greedy diverse selection (pairwise distance > threshold)
-    → top-8 cue IDs
+    → top-16 relevance-ranked cue IDs; WP-C consumes the first 8
 ```
 
-Output: `item_cues.json` — `{item_id: [cue_id_1, ..., cue_id_8]}`
+Output: `item2cues.json` — `{item_id: [cue_id_1, ..., cue_id_16]}`
 
 ### 4.3 Position-type mask
 
@@ -245,7 +246,24 @@ decode RVQ → Ê(m) = weight[z1-1] + weight[z2-1] + weight[z3-1]  ∈ R^64
 
 ## 6. Evaluation
 
-Retrieval metrics (Recall, Precision, Hit) are **dropped**. Generated music cannot overlap the catalog by design.
+WP-C evaluation is frozen independently of the WP-D audio demo:
+
+1. Keep test playlists with at least 20 songs and retain the first 20.
+2. Use songs 1–15 as the unchanged reference context and songs 16–20 as the
+   five ground-truth future songs.
+3. Independently full-mask-sample one next item five times; never feed a sample
+   back into the context.
+4. Retrieve predictions against the full 5,119-song catalog and solve the 5x5
+   prediction/target cosine matrix with Hungarian assignment.
+
+| WP-C metric | Description |
+|---|---|
+| Matched CLHE cosine ↑ | Mean cosine under optimal one-to-one 5x5 assignment |
+| Exact recall / precision / F1 ↑ | Multiset catalog-item overlap; duplicates receive no extra credit |
+| Any hit ↑ | Whether at least one of the five predictions matches |
+| Unique ratio ↑ | Unique retrieved predictions divided by five |
+
+WP-D synthesis/audio evaluation remains a separate later stage:
 
 | Metric | Description |
 |---|---|
@@ -284,7 +302,9 @@ Retrieval metrics (Recall, Precision, Hit) are **dropped**. Generated music cann
 | Token stride: k=13 per item | ✓ |
 | Vocab size: 2894 (incl. MASK token) | ✓ |
 | Creative cues vocab size: 2048 | ✓ |
-| K=8 cues per item | ✓ |
+| Stored cue candidates per item: 16, active prefix: 8 | ✓ |
+| Training: up to 15 references → one target (16 total) | ✓ |
+| Evaluation: first 20, 15 references → five targets, sampled five times | ✓ |
 | Dispersion conditioning via additive SiLU projection | ✓ |
 | Verbalization: kNN in CLHE space + Qwen3 LLM (no T5) | ✓ |
 | Synthesis: ACE-Step (frozen) | ✓ |
