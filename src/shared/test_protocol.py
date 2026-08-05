@@ -19,9 +19,6 @@ def test_frozen_lengths_and_model_width():
     assert protocol.eval_total_items == 20
     assert protocol.eval_reference_items == 15
     assert protocol.eval_target_items == protocol.eval_num_samples == 5
-    assert protocol.eval_sampling_steps == 256
-    assert protocol.eval_seed == 1
-    assert protocol.eval_use_ema is True
     assert protocol.model_token_length(13) == 210
 
 
@@ -41,29 +38,6 @@ def test_config_drift_is_rejected():
         raise AssertionError("Expected a drifting training length to fail")
 
 
-def test_official_stochastic_eval_settings_are_frozen():
-    protocol = FROZEN_NEXT_SONG_PROTOCOL
-    protocol.validate_evaluation_config({
-        "seed": 1,
-        "sampling": {"steps": 256},
-        "eval": {"disable_ema": False},
-    })
-    try:
-        protocol.validate_evaluation_config({
-            "seed": 1,
-            "sampling": {"steps": 25},
-            "eval": {"disable_ema": False},
-        })
-    except ValueError as exc:
-        assert "sampling.steps" in str(exc)
-    else:
-        raise AssertionError("Expected official sampling-step drift to be rejected")
-
-    protocol.validate_evaluation_config({
-        "seed": 99,
-        "sampling": {"steps": 1},
-        "eval": {"disable_ema": True},
-    }, allow_override=True)
 
 
 if __name__ == "__main__":

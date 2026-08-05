@@ -1,8 +1,10 @@
 # Frozen next-song training and evaluation protocol
 
 This is the authoritative GenPlaylist-v2 experimental contract shared by
-WP-A, WP-B, and WP-C. Machine-readable values are defined once in
-`src/shared/protocol.py`; WP-C rejects Hydra overrides that drift from them.
+WP-A, WP-B, and WP-C. Machine-readable data-shape values are defined once in
+`src/shared/protocol.py`; official stochastic evaluation settings are isolated
+in `src/03_backbone_recommender/evaluation_protocol.py` so they do not alter
+prepared-data fingerprints. WP-C rejects silent overrides of either contract.
 
 | Setting | Frozen value |
 |---|---:|

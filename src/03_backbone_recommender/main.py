@@ -36,7 +36,7 @@ import utils  # 工具函数集合
 from dataset import AbstractDataset  # 抽象数据集类，负责加载原始数据
 from warmstart import apply_ddbc_warmstart
 from prepared_data import load_prepared_tokenized_dataset
-from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
+from evaluation_protocol import OFFICIAL_EVALUATION_PROTOCOL
 
 
 # ============ HuggingFace Dataset包装器 ============
@@ -209,7 +209,7 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
   """
   logger.info('Starting RecSys Evaluation.')
   allow_protocol_override = bool(config.eval.get('allow_protocol_override', False))
-  FROZEN_NEXT_SONG_PROTOCOL.validate_evaluation_config(
+  OFFICIAL_EVALUATION_PROTOCOL.validate_config(
       config, allow_override=allow_protocol_override)
 
   # 加载训练好的模型和评估器
@@ -370,6 +370,7 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       },
       'protocol': omegaconf.OmegaConf.to_container(
           config.protocol, resolve=True),
+      'official_evaluation_contract': OFFICIAL_EVALUATION_PROTOCOL.as_dict(),
       'evaluation': {
           'test_examples': len(tokenized_dataset['test']),
           'catalog_items': len(tokenizer.item_id_to_row),

@@ -342,6 +342,20 @@ def main():
             print(f"  {k:>4}  {r:>10.4f}  {p:>12.4f}")
         print(f"   MRR  {results[enc_name]['mrr_full_catalog']:>10.4f} (full catalog)")
 
+    results['_metadata'] = {
+        'result_schema': 'genplaylist-wp-a-recall-eval-v1',
+        'protocol': 'unified_val_test_first20_15ref_5target',
+        'catalog_items': len(catalog_ids),
+        'test_playlists': len(playlists),
+        'reference_items': FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items,
+        'target_items': FROZEN_NEXT_SONG_PROTOCOL.eval_target_items,
+        'k_values': K_VALUES,
+        'mrr_scope': 'full_catalog_excluding_references',
+        'data_dir': data_dir,
+        'artifact_dir': artifact_dir,
+        'source_splits': [os.path.abspath(path) for path in split_paths],
+    }
+
     # Save (suffix in filename for split-ratio ablation)
     out_path = os.path.abspath(os.path.expanduser(args.output))
     if args.out_suffix:

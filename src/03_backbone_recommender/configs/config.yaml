@@ -167,9 +167,6 @@ protocol:
   eval_reference_items: 15
   eval_target_items: 5
   eval_num_samples: 5
-  eval_sampling_steps: 256
-  eval_seed: 1
-  eval_use_ema: true
 
 num_proc: 1
 eval_batch_size: 32
