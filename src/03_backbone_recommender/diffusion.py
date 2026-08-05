@@ -260,12 +260,14 @@ class Diffusion(L.LightningModule):
       updated_dls.append(
         torch.utils.data.DataLoader(
           dl.dataset,
-          batch_size=self.config.loader.batch_size,
-          num_workers=self.config.loader.num_workers,
-          pin_memory=self.config.loader.pin_memory,
+          batch_size=dl.batch_size,
+          num_workers=dl.num_workers,
+          pin_memory=dl.pin_memory,
           sampler=dl_sampler,
           shuffle=False,
-          persistent_workers=True))
+          collate_fn=dl.collate_fn,
+          drop_last=dl.drop_last,
+          persistent_workers=(dl.persistent_workers if dl.num_workers > 0 else False)))
     self.trainer.fit_loop._combined_loader.flattened = updated_dls
 
   def optimizer_step(self, *args, **kwargs):

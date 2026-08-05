@@ -17,6 +17,7 @@ MODEL_SIZE="${GENPLAYLIST_MODEL_SIZE:-small}"
 GLOBAL_BATCH_SIZE="${GENPLAYLIST_GLOBAL_BATCH_SIZE:-512}"
 TRAIN_BATCH_SIZE="${GENPLAYLIST_TRAIN_BATCH_SIZE:-300}"
 MAX_STEPS="${GENPLAYLIST_MAX_STEPS:-20000}"
+LIMIT_TRAIN_BATCHES="${GENPLAYLIST_LIMIT_TRAIN_BATCHES:-1.0}"
 
 if [[ ! -f "$PREPARED_DATA_ROOT/prepared_manifest.json" ]]; then
   echo "Missing prepared WP-C data: $PREPARED_DATA_ROOT/prepared_manifest.json" >&2
@@ -74,6 +75,7 @@ python main.py \
   prepared_dataset_path="$PREPARED_DATA_ROOT" \
   +run_name=${RUN_NAME} \
   trainer.max_steps="$MAX_STEPS" \
+  trainer.limit_train_batches="$LIMIT_TRAIN_BATCHES" \
   parameterization=subs \
   eval.compute_generative_perplexity=False \
   sampling.steps=25 \

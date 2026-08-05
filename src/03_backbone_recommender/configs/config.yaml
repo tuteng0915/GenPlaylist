@@ -94,7 +94,7 @@ trainer:
   log_every_n_steps: 10
   limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
   limit_val_batches: 0.0     # no validation split; evaluate unified test after training
-  val_check_interval: 32
+  val_check_interval: 1.0     # inert while limit_val_batches=0; supports short smoke epochs
 
 wandb: null  # 已禁用，使用 TensorBoard 替代（bash scripts/start_tensorboard.sh）
 
