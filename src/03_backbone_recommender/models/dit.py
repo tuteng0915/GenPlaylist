@@ -365,7 +365,14 @@ class EmbeddingLayer(nn.Module):
     data_root = Path(configured_root).expanduser() if configured_root else repo_root / "data" / "dataset"
     preferred = data_root / "rvq_codebook_weights.npy"
     legacy = data_root / f'{config["feature_type"]}_weight.npy'
-    weight_path = preferred if preferred.is_file() else legacy
+    configured_weight = config.get("codebook_weights_path", None)
+    if configured_weight:
+      weight_path = Path(configured_weight).expanduser()
+      if not weight_path.is_file():
+        raise FileNotFoundError(
+          f"Configured RVQ codebook weights do not exist: {weight_path}")
+    else:
+      weight_path = preferred if preferred.is_file() else legacy
     if not weight_path.is_file():
       raise FileNotFoundError(
         "Missing RVQ codebook weights. Expected "
