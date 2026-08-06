@@ -92,8 +92,8 @@ def run_method(method, items, lyrics_proc, min_df, force, block_tokens, top_n, c
 
 
 def evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id, lyrics_ref,
-                    lyrics_proc, sample_ids):
-    """Coverage + within-item diversity + Level 1 grounding + Level 2 retrieval."""
+                    lyrics_proc, sample_ids, run_judge=False):
+    """Coverage + within-item diversity + Level 1 grounding + Level 2 retrieval (+ LLM judge)."""
     cov = cue_export.compute_coverage_stats(item2cues, vocab)
     # Within-item cue diversity (paper target < 0.7), using the assignment embeddings.
     div = cue_eval.within_item_diversity(item2cues, cue_emb)
@@ -102,7 +102,11 @@ def evaluate_method(method, vocab, item2cues, nstats, cue_emb, catalog_by_id, ly
     # Level 2 retrieval: same processed song representation used at assignment time.
     l2 = cue_eval.level2_semantic_retrieval(
         catalog_by_id, item2cues, vocab, lyrics_proc, sample_ids)
-    return {**nstats, **cov, **div, **l1, **l2}
+    row = {**nstats, **cov, **div, **l1, **l2}
+    # LLM judge: cues vs the REAL lyrics, scored 1-5 on the eval sample.
+    if run_judge:
+        row.update(cue_eval.llm_judge_grounding(item2cues, vocab, lyrics_ref, sample_ids))
+    return row
 
 
 def run_level3_conditions(rows, vocabs, mappings, catalog_by_id, lyrics_ref,
@@ -173,8 +177,16 @@ def main():
                     help="common window (chars) applied to both gen and real lyrics "
                          "before Level 3 metrics, so lengths are comparable (0 = full)")
     ap.add_argument("--eval-sample", type=int, default=150)
-    ap.add_argument("--level3", action="store_true", help="run LLM reconstruction ablation")
+    ap.add_argument("--level3", action=argparse.BooleanOptionalAction, default=True,
+                    help="run the LLM reconstruction ablation (costs API calls when "
+                         "OPENAI_API_KEY is set; skipped automatically otherwise). "
+                         "On by default — use --no-level3 to skip.")
     ap.add_argument("--level2", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--llm-judge", action=argparse.BooleanOptionalAction, default=True,
+                    help="run an LLM-judge grounding score: for each eval-sample song, an LLM "
+                         "rates 1-5 how well the assigned cues match the real lyrics (costs API "
+                         "calls when OPENAI_API_KEY is set; skipped automatically otherwise). "
+                         "On by default — use --no-llm-judge to skip.")
     ap.add_argument("--llm-batch", action="store_true",
                     help="submit LLM extraction through the OpenAI Batch API")
     ap.add_argument("--recon-batch", action="store_true",
@@ -290,6 +302,10 @@ def main():
     vocabs = {}
     mappings = {}
     run_level3 = args.level3 or args.level2
+    run_judge = args.llm_judge
+    if run_judge and not cue_clients.is_available():
+        print("[compare] LLM judge requested but no API key; skipping.")
+        run_judge = False
     llm_batch_job = None
     run_methods = methods
     if args.llm_batch and "llm" in methods:
@@ -306,7 +322,7 @@ def main():
                                                        vocab_items=train_items, num_cues=args.num_cues,
                                                        vocab_size=args.vocab_size, embedder=args.embedder)
         row = evaluate_method(method, vocab, _eval_view(item2cues), nstats, cue_emb, catalog_by_id,
-                              lyrics_raw, lyrics_proc, sample_ids)
+                              lyrics_raw, lyrics_proc, sample_ids, run_judge=run_judge)
         rows[method] = row
         vocabs[method] = vocab
         mappings[method] = item2cues
@@ -324,7 +340,7 @@ def main():
             dedup_threshold=eff_dedup, rank_by=args.rank_by, num_cues=args.num_cues,
             vocab_size=args.vocab_size, embedder=args.embedder)
         row = evaluate_method("llm", vocab, _eval_view(item2cues), nstats, cue_emb, catalog_by_id,
-                              lyrics_raw, lyrics_proc, sample_ids)
+                              lyrics_raw, lyrics_proc, sample_ids, run_judge=run_judge)
         rows["llm"] = row
         vocabs["llm"] = vocab
         mappings["llm"] = item2cues
@@ -461,6 +477,16 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
             "Evaluation encoders (Level 2 retrieval, Level 3 STS-cosine) are unaffected — they "
             "deliberately use an independent encoder regardless of this setting.\n")
 
+    # ---- LLM judge / Level 3 skipped banners (disabled via flag, or no API key) ----
+    if not args.llm_judge:
+        lines.append("\n> **LLM judge skipped:** run with `--no-llm-judge`.\n")
+    elif not any(r.get("llm_judge_n") for r in rows.values()):
+        lines.append("\n> **LLM judge skipped:** no `OPENAI_API_KEY` was available.\n")
+    if not (args.level3 or args.level2):
+        lines.append("\n> **Level 3 reconstruction skipped:** run with `--no-level3`.\n")
+    elif not (oracle or any(r.get("level3") for r in rows.values())):
+        lines.append("\n> **Level 3 reconstruction skipped:** no `OPENAI_API_KEY` was available.\n")
+
     # ---- Held-out eval banner (optional, --held-out-eval) ----
     if split_info:
         lines.append(
@@ -476,9 +502,11 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
 
     # ---- 2. TL;DR ----
     has_l3 = bool(oracle) or any(r.get("level3") for r in rows.values())
+    has_judge = any(r.get("llm_judge_n") for r in rows.values())
     best_ret = _best_method(rows, "retrieval_mrr", higher=True)
     best_ground = _best_method(rows, "level1_rouge1_recall", higher=True)
     best_div = _best_method(rows, "intra_cos_mean", higher=False)
+    best_judge = _best_method(rows, "llm_judge_mean", higher=True)
     lines += ["\n## TL;DR\n"]
     if best_ret:
         lines.append(f"- **Retrieval (identity):** best is `{best_ret}` "
@@ -489,6 +517,9 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
     if best_div:
         lines.append(f"- **Cue diversity (intra-cos, <0.7):** most diverse is `{best_div}` "
                      f"({rows[best_div].get('intra_cos_mean')}).\n")
+    if best_judge:
+        lines.append(f"- **LLM judge (cues↔lyrics):** best is `{best_judge}` "
+                     f"(mean score {rows[best_judge].get('llm_judge_mean')}/5).\n")
     if has_l3:
         best_recon = None
         cand = {m: r["level3"].get("sts_cosine") for m, r in rows.items()
@@ -543,13 +574,33 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
          ("retrieval_r1", True), ("retrieval_r5", True), ("retrieval_r10", True),
          ("retrieval_mrr", True), ("retrieval_median_rank", False)])
 
-    # ---- 6. Reconstruction (Level 3) ----
+    # ---- 6. LLM judge (cue<->lyric match) ----
+    if has_judge:
+        _judge_model = next((r.get("llm_judge_model") for r in rows.values()
+                             if r.get("llm_judge_model")), cue_clients.CHAT_MODEL)
+        lines += ["\n## 4. LLM judge (cue↔lyric match)\n",
+                  "An LLM is shown each song's assigned cues alongside its real lyrics and rates "
+                  "1 (unrelated) to 5 (clearly drawn from the lyrics) how well the cues match the "
+                  "lyrics' content. Scored on the eval sample; independent of the ROUGE-based "
+                  "Level 1 grounding metric above.\n\n",
+                  f"_Judge model: `{_judge_model}` · temperature 0._\n\n",
+                  "**System prompt:**\n\n```\n" + cue_eval.JUDGE_SYSTEM_PROMPT + "\n```\n\n",
+                  "**User prompt template** (per song, `{lyrics}`/`{cues}` filled in; "
+                  f"lyrics truncated to {cue_eval._JUDGE_LYRIC_CHARS} chars):\n\n",
+                  "```\nLyrics:\n{lyrics}\n\nCreative cues: {cues}\n\n"
+                  "On a scale of 1-5, how well do these cues match the content of these lyrics? "
+                  "Respond with ONLY the integer.\n```\n\n"]
+        lines += _table(
+            rows, ["Judge score (1-5) ↑", "n scored"],
+            [("llm_judge_mean", True), ("llm_judge_n", True)])
+
+    # ---- 7. Reconstruction (Level 3) ----
     if has_l3:
         _sts_enc = next((r.get("level3", {}).get("sts_encoder") for r in rows.values()
                          if r.get("level3", {}).get("sts_encoder")), "all-mpnet-base-v2")
         _win = (f"both lyrics scored over the same first {args.score_chars} chars"
                 if args.score_chars else "full lyrics scored (no length window)")
-        lines += ["\n## 4. Reconstruction comparison (downstream usefulness)\n",
+        lines += ["\n## 5. Reconstruction comparison (downstream usefulness)\n",
                   "Decode lyrics from cues (title/artist withheld), score vs real lyrics. "
                   "Bracketed **no-cues floor < random floor < methods < oracle ceiling** — "
                   "read deltas above the floors.\n\n",
@@ -573,8 +624,8 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
         if oracle:
             lines.append(_l3_row("oracle (ceiling)", oracle))
 
-    # ---- 7. Qualitative ----
-    _heading = "## 5. Qualitative samples (cues per method"
+    # ---- 8. Qualitative ----
+    _heading = "## 6. Qualitative samples (cues per method"
     _heading += ", + oracle ceiling)\n" if oracle_cues is not None else ")\n"
     lines += [f"\n{_heading}"]
     for iid in sample_ids[:12]:
@@ -614,6 +665,7 @@ def write_report(rows, vocabs, mappings, sample_ids, catalog_by_id, floor, oracl
         "- **Entropy:** Shannon entropy (bits) of cue-usage distribution; higher=less collapse onto a few cues.\n",
         "- **L1 ROUGE-1/L:** ROUGE recall of assigned cue text vs real lyrics; lexical grounding sanity check.\n",
         "- **Retrieval R@K / MRR / rank:** rank of the true song when its cues query artist-free song texts, via an independent encoder (non-circular).\n",
+        "- **LLM judge:** an LLM (see prompt in section 4) rates 1-5 how well a song's assigned cues match its real lyrics, averaged over the eval sample; independent of the lexical Level 1 ROUGE metric.\n",
         "- **Level 3 ROUGE/BLEU/BERTScore/Cosine:** decode lyrics from cues, score vs real. Cosine is document-level and length-robust; BERTScore is baseline-rescaled.\n",
         f"- **no-cues / random floor / oracle ceiling:** reconstruction from zero cues "
         f"(genre/mood only), from {args.num_cues} random vocab cues, and from {args.num_cues} "
