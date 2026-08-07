@@ -12,7 +12,6 @@ where they themselves live (top-level, sweeps/, or legacy/).
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -34,15 +33,14 @@ CATALOG_PATH = Path(os.environ.get(
 LYRICS_DIR = Path(os.environ.get(
     "CUE_LYRICS_DIR", str(REPO_ROOT / "data" / "lyrics" / "spotify")))
 
-_CATALOG_CACHE: Optional[list[tuple[str, dict]]] = None
+_CATALOG_CACHE: Optional[list[CatalogItem]] = None
 
 
-def _raw_catalog() -> list[tuple[str, dict]]:
-    """Load + cache catalog_metadata.json's raw (item_id, entry) pairs, in file order."""
+def _raw_catalog() -> list[CatalogItem]:
+    """Load and cache the shared catalog contract in authoritative file order."""
     global _CATALOG_CACHE
     if _CATALOG_CACHE is None:
-        with open(CATALOG_PATH, encoding="utf-8") as f:
-            _CATALOG_CACHE = list(json.load(f).items())
+        _CATALOG_CACHE = CatalogItem.load_catalog(str(CATALOG_PATH))
     return _CATALOG_CACHE
 
 
@@ -54,11 +52,7 @@ def load_catalog_and_lyrics(
     Returns (items, lyrics_raw) where lyrics_raw is {item_id: raw lyric string},
     present only for items that have a lyrics file on disk.
     """
-    entries = _raw_catalog()[:limit] if limit else _raw_catalog()
-    items = [
-        CatalogItem(**{k: v for k, v in entry.items() if k in CatalogItem.__dataclass_fields__})
-        for _iid, entry in entries
-    ]
+    items = _raw_catalog()[:limit] if limit else list(_raw_catalog())
     lyrics_raw: dict[str, str] = {}
     for it in items:
         path = LYRICS_DIR / f"{it.item_id}.txt"

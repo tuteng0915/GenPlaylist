@@ -1,55 +1,57 @@
-"""synthesis/synthesis.py — ACE-Step music synthesis wrapper for GenPlaylist.
-
-Owned by WP-C.  Receives music_attributes + lyric_draft from verbalization.py
-and produces audio_path via ACE-Step.
+"""synthesis.py — ACE-Step music synthesis wrapper for GenPlaylist.
 
 Adapted from VibeMus/pipeline.py and VibeMus/tools.py.
-
-VibeMus used ACEStepPipeline directly in a Gradio chat loop.
-Here we expose a pure-function interface: given music_attributes
-(str) and a lyric_draft (str), synthesize a waveform and return
-the output path.  The pipeline is loaded once as a module-level
-singleton, matching VibeMus's pattern.
-
-TODOs
------
-- [ ] Confirm ACE-Step installation path and import (pip install acestep or local clone)
-- [ ] Tune dtype / torch_compile flag for the target GPU
-- [ ] Decide default audio_duration for generated playlist items
-- [ ] Add style_ref_audio support (nearest-neighbor acoustic reference from verbalization)
-- [ ] Batch synthesis: when S candidates exist, call pipe S times and collect paths
-- [ ] Add output directory config (currently writes to cwd)
+Exposes a pure-function interface: given music_attributes (str)
+and lyric_draft (str), synthesize a waveform and return the path.
+Pipeline loaded once as module-level singleton.
 """
 
 import os
+import shutil
+import sys
+import re
 from typing import Optional
 
+# Add VibeMus ace-step to path
+"""sys.path.insert(0, os.path.join(
+    os.path.dirname(__file__), '..', 'reference', 'VibeMus', 'src', 'ace-step'
+))"""
+
+if os.environ.get("ACE_STEP_PATH"):
+    sys.path.insert(0, os.environ["ACE_STEP_PATH"])
+
 # ---------------------------------------------------------------------------
-# Pipeline singleton  (mirrors VibeMus/pipeline.py)
+# Pipeline singleton (loaded once on import)
 # ---------------------------------------------------------------------------
-# TODO: install acestep before importing
-#   pip install git+https://github.com/ace-step/ACE-Step.git
-try:
-    from acestep.pipeline_ace_step import ACEStepPipeline
+
+_pipe = None
+
+
+def _get_pipeline():
+    """Load ACE-Step on first synthesis call, not while importing this module."""
+    global _pipe
+    if _pipe is not None:
+        return _pipe
+    try:
+        from acestep.pipeline_ace_step import ACEStepPipeline
+    except ImportError as exc:
+        raise RuntimeError(
+            "ACE-Step is unavailable. Install it or set ACE_STEP_PATH to its source tree.") from exc
     _pipe = ACEStepPipeline(
-        device_id=0,
-        dtype="bfloat16",
-        torch_compile=False,  # TODO: set True after confirming torch>=2.3
+        device_id=int(os.environ.get("ACE_STEP_DEVICE", "0")),
+        dtype=os.environ.get("ACE_STEP_DTYPE", "bfloat16"),
+        torch_compile=False,
     )
-except ImportError:
-    _pipe = None
-    print("[synthesis] ACEStepPipeline not found — synthesis will be unavailable. "
-          "Install: pip install git+https://github.com/ace-step/ACE-Step.git")
+    return _pipe
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
 def synthesize(
     music_attributes: str,
     lyric_draft: str,
-    audio_duration: int = 30,
+    audio_duration: float = 240.0,
     style_ref_audio_path: Optional[str] = None,
     output_dir: str = "outputs",
     filename: Optional[str] = None,
@@ -59,53 +61,61 @@ def synthesize(
     Parameters
     ----------
     music_attributes:
-        Comma-separated style tags, e.g. "pop, energetic, piano, 120bpm, C major, English".
-        Produced by verbalization.generate_music_attributes().
+        Comma-separated style tags from verbalization.generate_music_attributes().
+        e.g. "synth-pop, nostalgic, 98 BPM, retro synths, F minor, English"
     lyric_draft:
-        ACE-Step markup lyrics with section labels, e.g.:
-            [verse]
-            Staring at the neon rain...
-            [chorus]
-            ...
-        Produced by verbalization.generate_lyrics().
+        ACE-Step markup lyrics from verbalization.generate_lyrics().
+        e.g. "[verse]\\nLine one\\nLine two\\n[chorus]\\n..."
     audio_duration:
-        Target clip length in seconds.
+        Target song length in seconds. Defaults to ACE-Step's maximum supported
+        duration of 240 seconds so production callers receive a full song.
     style_ref_audio_path:
-        Optional path to a reference audio file (nearest catalog neighbor).
-        When provided, ACE-Step uses it as acoustic style reference.
-        # TODO: wire up repaint/edit tasks for style transfer
+        Optional path to nearest-neighbor catalog song for acoustic reference.
+        When provided, uses ACE-Step edit task for style transfer.
     output_dir:
-        Directory to write the generated .wav file.
+        Directory to write the browser-friendly MP3 file.
     filename:
-        Output filename (without extension). Auto-generated if None.
+        Output filename without extension. Auto-generated if None.
 
     Returns
     -------
-    str
-        Absolute path to the generated .wav file.
+    str: absolute path to generated MP3 file.
     """
-    if _pipe is None:
-        raise RuntimeError(
-            "ACEStepPipeline is not available. "
-            "Install acestep: pip install git+https://github.com/ace-step/ACE-Step.git"
-        )
+    if not music_attributes.strip() or not lyric_draft.strip():
+        raise ValueError("music_attributes and lyric_draft must not be empty")
+    if not 1.0 <= audio_duration <= 600.0:
+        raise ValueError(f"audio_duration must be in [1, 600] seconds, got {audio_duration}")
+
+    pipe = _get_pipeline()
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # TODO: wire style_ref_audio_path into pipe call via task='edit' or repaint
-    outputs = _pipe(
-        format="wav",
-        audio_duration=audio_duration,
-        prompt=music_attributes,
-        lyrics=lyric_draft,
+    if style_ref_audio_path and os.path.isfile(style_ref_audio_path):
+        # Use edit task with acoustic style reference (nearest catalog neighbor)
+        outputs = pipe(
+            task='edit',
+            src_audio_path=style_ref_audio_path,
+            edit_target_prompt=music_attributes,
+            edit_target_lyrics=lyric_draft,
+            audio_duration=audio_duration,
+            format="mp3",
+        )
+    else:
+        # Standard text-to-music generation
+        outputs = pipe(
+            prompt=music_attributes,
+            lyrics=lyric_draft,
+            audio_duration=audio_duration,
+            format="mp3",
+        )
+
+    ace_output_path = outputs[0]
+    out_path = (
+        os.path.join(output_dir, filename + ".mp3")
+        if filename is not None
+        else ace_output_path
     )
-
-    out_path = outputs[0]
-
-    if filename is not None:
-        import shutil
-        dest = os.path.join(output_dir, filename + ".wav")
-        shutil.move(out_path, dest)
-        out_path = dest
+    if os.path.abspath(ace_output_path) != os.path.abspath(out_path):
+        shutil.move(ace_output_path, out_path)
 
     return os.path.abspath(out_path)

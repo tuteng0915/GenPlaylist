@@ -8,15 +8,10 @@ Implements Eq.(1) from the GenPlaylist paper:
 These two scalars are the conditioning signals fed into the diffusion model
 (alongside the noise-level τ) via AdaLN in every Transformer block.
 
-TODOs
------
-- [ ] Switch from generic CLHE proxy (faiss weight matrix) to real CLHE encoder output
-      once CLHE embeddings are available for both datasets
-- [ ] Precompute and cache (μ_C, σ²_C) per playlist split to avoid redundant computation
-      during training — store alongside tokenized dataset
-- [ ] Compute Q33 / Q66 of σ²_C over training set and save to dataset dir for
-      compact/medium/diverse tier analysis (Table 3 in paper)
-- [ ] Expose a batch version: compute_playlist_structure_batch for DataLoader integration
+The caller must supply the real per-item CLHE matrix and explicit row mapping.
+The tokenizer computes these values during preprocessing.  A remaining
+experiment task is to persist training-split Q33/Q66 thresholds for tiered
+evaluation.
 """
 
 import numpy as np
@@ -31,17 +26,19 @@ from typing import Union
 def compute_playlist_structure(
     item_ids: list,
     emb_matrix: Union[np.ndarray, torch.Tensor],
+    item_id_to_row: dict[str, int],
 ) -> tuple:
     """Compute centroid μ_C and dispersion σ²_C for a playlist prefix.
 
     Parameters
     ----------
     item_ids:
-        List of integer item IDs in the playlist context C.
+        List of opaque item IDs in the playlist context C.
     emb_matrix:
         Shape (N_items, d) — embedding matrix for all catalog items.
-        Row i corresponds to item_id i.
-        Currently a faiss-derived weight matrix; swap for CLHE output later.
+        This must be a per-item CLHE matrix, not RVQ codebook weights.
+    item_id_to_row:
+        Explicit mapping from opaque item ID to embedding row.
 
     Returns
     -------
@@ -49,11 +46,26 @@ def compute_playlist_structure(
         mu_c:     np.ndarray of shape (d,) — playlist centroid.
         sigma_c2: float — playlist dispersion scalar.
     """
+    if not item_ids:
+        raise ValueError("Cannot compute playlist structure for an empty context")
+    if not item_id_to_row:
+        raise ValueError("item_id_to_row is required; raw item IDs are not matrix rows")
     if isinstance(emb_matrix, torch.Tensor):
         emb_matrix = emb_matrix.detach().cpu().numpy()
+    emb_matrix = np.asarray(emb_matrix)
+    if emb_matrix.ndim != 2:
+        raise ValueError(f"emb_matrix must be 2-D, got {emb_matrix.shape}")
 
-    ids = [int(i) for i in item_ids]
-    embs = emb_matrix[ids]              # (|C|, d)
+    normalized_ids = [str(item_id) for item_id in item_ids]
+    missing = [item_id for item_id in normalized_ids if item_id not in item_id_to_row]
+    if missing:
+        raise KeyError(f"Playlist contains item IDs missing from item_id_to_row: {missing[:5]}")
+    rows = [item_id_to_row[item_id] for item_id in normalized_ids]
+    if any(row < 0 or row >= len(emb_matrix) for row in rows):
+        raise ValueError("item_id_to_row contains a row outside emb_matrix")
+    embs = emb_matrix[rows]             # (|C|, d)
+    if not np.isfinite(embs).all():
+        raise ValueError("Playlist embeddings contain NaN or infinity")
 
     mu_c = embs.mean(axis=0)            # (d,)
     diffs = embs - mu_c[None, :]        # (|C|, d)
@@ -65,6 +77,7 @@ def compute_playlist_structure(
 def compute_playlist_structure_batch(
     item_ids_batch: list,
     emb_matrix: Union[np.ndarray, torch.Tensor],
+    item_id_to_row: dict[str, int],
 ) -> tuple:
     """Batch version: compute (μ_C, σ²_C) for a list of playlist prefixes.
 
@@ -75,6 +88,8 @@ def compute_playlist_structure_batch(
         Playlists may have different lengths; padding is NOT applied.
     emb_matrix:
         Shape (N_items, d).
+    item_id_to_row:
+        Explicit mapping from opaque item ID to embedding row.
 
     Returns
     -------
@@ -85,7 +100,7 @@ def compute_playlist_structure_batch(
     mu_c_batch = []
     sigma_c2_batch = []
     for item_ids in item_ids_batch:
-        mu_c, sigma_c2 = compute_playlist_structure(item_ids, emb_matrix)
+        mu_c, sigma_c2 = compute_playlist_structure(item_ids, emb_matrix, item_id_to_row)
         mu_c_batch.append(mu_c)
         sigma_c2_batch.append(sigma_c2)
     return mu_c_batch, sigma_c2_batch

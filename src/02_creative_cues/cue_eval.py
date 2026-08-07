@@ -14,7 +14,7 @@ LLM judge (cue<->lyric match, on the eval sample):
     judge_prompt() and llm_judge_grounding().
 
 Level 3 — reconstruction ablation (the encode -> decode -> score loop):
-    real lyrics --encode--> 6 cues --decode(LLM)--> regenerated lyrics
+    real lyrics --encode--> 8 cues --decode(LLM)--> regenerated lyrics
                             real lyrics <--BLEU/ROUGE/BERTScore-- regenerated
     Run with several decoder inputs (none / each method's cues / oracle) and
     compare: if cues carry information, scores rise above the metadata-only floor.
@@ -81,7 +81,7 @@ def level1_intrinsic(
     }
 
 
-def within_item_diversity(item2cues, cue_embeddings) -> dict:
+def within_item_diversity(item2cues, cue_embeddings, cue_limit: int | None = None) -> dict:
     """Mean within-item pairwise cosine of each song's assigned cue embeddings.
 
     Lower = more diverse (paper target < 0.7). cue_embeddings[k] aligns with vocab
@@ -96,7 +96,8 @@ def within_item_diversity(item2cues, cue_embeddings) -> dict:
     sims: list[float] = []
     for entry in item2cues.values():
         vecs = []
-        for c in entry.cue_ids:
+        cue_ids = entry.cue_ids[:cue_limit] if cue_limit is not None else entry.cue_ids
+        for c in cue_ids:
             k = c - 1
             if c != 0 and 0 <= k < len(emb) and norms[k, 0] > 0:
                 vecs.append(unit[k])
@@ -514,7 +515,7 @@ _ORACLE_SYSTEM = (
 
 
 def oracle_cues_by_id(catalog_by_id, lyrics_dict, sample_ids, n_cues: int = 6) -> dict[str, list[str]]:
-    """Oracle ceiling: 6 cues an LLM extracts from each song's REAL lyrics (cached)."""
+    """Oracle ceiling: n_cues an LLM extracts from each song's REAL lyrics (cached)."""
     out: dict[str, list[str]] = {}
     for iid in sample_ids:
         ref = lyrics_dict.get(iid, "")

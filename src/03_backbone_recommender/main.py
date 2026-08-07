@@ -6,11 +6,14 @@ main.py - DISCO项目的主入口文件
 
 # ============ 标准库导入 ============
 import os  # 操作系统接口，用于文件路径等操作
+import hashlib
 import numpy as np  # 数值计算库，用于数组操作
 import time  # 时间相关操作
 import json  # JSON数据处理
 import warnings  # 警告控制
 from collections import defaultdict, OrderedDict  # 特殊字典类型，用于结果统计
+from datetime import datetime, timezone
+from pathlib import Path
 
 # ============ 第三方库导入 ============
 import fsspec  # 文件系统规范库，用于跨平台文件系统操作
@@ -28,8 +31,12 @@ from safetensors.torch import load_file  # 安全的模型权重加载库
 import dataloader  # 数据加载模块，负责数据预处理和批量加载
 import diffusion  # 扩散模型核心模块，定义了扩散过程和模型结构
 from evaluator import Evaluator  # 评估器，计算推荐指标（recall、precision等）
+from genplaylist_tokenizer import GenPlaylistTokenizer
 import utils  # 工具函数集合
 from dataset import AbstractDataset  # 抽象数据集类，负责加载原始数据
+from warmstart import apply_ddbc_warmstart
+from prepared_data import load_prepared_tokenized_dataset
+from evaluation_protocol import OFFICIAL_EVALUATION_PROTOCOL
 
 
 # ============ HuggingFace Dataset包装器 ============
@@ -97,18 +104,18 @@ def _load_from_checkpoint(config, tokenizer):
 
 
 @L.pytorch.utilities.rank_zero_only  # 装饰器：仅在主进程（rank 0）执行，用于分布式训练
-def _print_batch(train_ds, valid_ds, tokenizer, k=64):
+def _print_batch(train_ds, test_ds, tokenizer, k=64):
   """
   打印训练和验证数据批次的样例（调试用）
 
   Args:
       train_ds: 训练数据加载器
-      valid_ds: 验证数据加载器
+      test_ds: 测试数据加载器
       tokenizer: 分词器
       k: 打印前k个和后k个token
   """
   for dl_type, dl in [
-    ('train', train_ds), ('valid', valid_ds)]:
+    ('train', train_ds), ('test', test_ds)]:
     print(f'Printing {dl_type} dataloader batch.')
 
     batch = next(iter(dl))  # 获取一个批次的数据
@@ -201,6 +208,9 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       output_results: 包含各项评估指标的有序字典
   """
   logger.info('Starting RecSys Evaluation.')
+  allow_protocol_override = bool(config.eval.get('allow_protocol_override', False))
+  OFFICIAL_EVALUATION_PROTOCOL.validate_config(
+      config, allow_override=allow_protocol_override)
 
   # 加载训练好的模型和评估器
   model = _load_from_checkpoint(config=config, tokenizer=tokenizer)
@@ -227,6 +237,8 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
     for batch in tqdm(test_ds, desc="Evaluating", ncols=100):
       input_ids = batch['input_ids']  # 输入的bundle前半部分
       labels = batch.get('labels')  # 标签是bundle的后半部分
+      if labels is None:
+        raise ValueError("rec_eval requires tokenizer-provided ground-truth labels")
 
       # CFG: extract context_emb if guidance is enabled
       cfg_enabled = getattr(config.sampling, 'cfg_enabled', False)
@@ -235,73 +247,56 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
         context_emb = batch.get('context_emb', None)
         if context_emb is not None:
           context_emb = context_emb.to(next(model.parameters()).device).float()
+      mu_c = batch.get('mu_c', None)
+      sigma_c2 = batch.get('sigma_c2', None)
+      if mu_c is not None:
+        mu_c = mu_c.to(next(model.parameters()).device).float()
+      if sigma_c2 is not None:
+        sigma_c2 = sigma_c2.to(next(model.parameters()).device).float()
 
-      # 设置生成参数
-      # stride_length应该根据实际需要生成的长度计算
-      # labels是test_gt=True格式（无BOI）：[BOS, d0,d1,d2,d3, ..., EOS]
-      # 但生成时需要BOI格式：[BOS, BOI,d0,d1,d2,d3, ..., EOS]
-      # 所以需要转换：labels长度 + (num_items * 1) 因为每个item多一个BOI
-      # 注意：labels的长度已经由tokenizer根据predict_num_items/predict_ratio/default(0.5)决定
-
-      # 动态计算：去掉BOS和EOS
-      # labels中每个item = n_digit个RVQ codes + 1个conflict digit
-      # 3 codebooks: 4 tokens/item (d0,d1,d2,conflict), 4 codebooks: 5 tokens/item (d0,d1,d2,d3,conflict)
-      tokens_per_item_in_labels = tokenizer.n_digit + 1  # +1 for conflict digit
-      num_items = (labels.shape[1] - 2) // tokens_per_item_in_labels
-
-      # stride_length = BOS + (num_items × tokens_per_item) + EOS
-      # tokens_per_item = BOI + n_digit个RVQ codes + 1个conflict = n_digit + 2
-      # 3 codebooks: 5 tokens/item, 4 codebooks: 6 tokens/item
-      tokens_per_item = tokenizer.n_digit + 2
-      stride_length = 1 + num_items * tokens_per_item + 1
-
-      # 确保stride_length符合模式（余数应为2，即BOS+EOS）
-      # 3 codebooks: stride_length % 5 == 2, 4 codebooks: stride_length % 6 == 2
-      expected_remainder = 2
-      if stride_length % tokens_per_item != expected_remainder:
-        # 调整到最接近的合法长度
-        stride_length = (stride_length // tokens_per_item) * tokens_per_item + expected_remainder
+      # Each draw is still next-one full-MASK completion, but evaluation uses
+      # five independent draws against the five songs following the same
+      # 15-song context.
+      eval_num_samples = int(config.protocol.eval_num_samples)
+      eval_target_items = int(config.protocol.eval_target_items)
+      if labels.ndim != 3 or labels.shape[1] != eval_target_items:
+        raise ValueError(
+            f"rec_eval expects {eval_target_items} future-item labels, "
+            f"got {tuple(labels.shape)}")
+      num_items = 1
+      tokens_per_item = tokenizer.tokens_per_item
+      stride_length = 2 + tokens_per_item
 
       # DEBUG: 只在第一个batch打印配置信息
       if len(all_results) == 0:
         print(f"\n[Rec Eval Config]")
-        # 打印预测配置
-        predict_num_items = config.eval.get('predict_num_items', None) if hasattr(config, 'eval') else None
-        predict_ratio = config.eval.get('predict_ratio', None) if hasattr(config, 'eval') else None
-        if predict_num_items is not None:
-            print(f"  Prediction mode: predict_num_items = {predict_num_items} (fixed item count)")
-        elif predict_ratio is not None:
-            print(f"  Prediction mode: predict_ratio = {predict_ratio} (ratio of total)")
-        else:
-            print(f"  Prediction mode: default (0.5, predicting half)")
+        print("  Prediction mode: 15 references -> 5 independent next-one samples")
         print(f"  labels.shape: {labels.shape}")
         print(f"  labels[0, :]: {labels[0, :].tolist()}")
         print(f"  input_ids.shape: {input_ids.shape}")
         print(f"  input_ids[0, :]: {input_ids[0, :].tolist()}")
-        print(f"  num_items to generate: {num_items}")
+        print(f"  items per draw: {num_items}")
+        print(f"  independent draws: {eval_num_samples}")
         print(f"  tokens_per_item: {tokens_per_item} (BOI + {tokenizer.n_digit} RVQ digits + 1 conflict)")
         print(f"  calculated stride_length: {stride_length}")
-        print(f"  stride_length % {tokens_per_item} = {stride_length % tokens_per_item} (should be {expected_remainder})")
 
+      # Draw five alternatives independently from the same context.  Samples
+      # are never fed back as context, so this remains next-one inference.
+      text_samples = torch.zeros(
+          (input_ids.shape[0], eval_num_samples, stride_length), dtype=torch.long)
 
-      num_strides = 1  # 生成步数
-      max_k = max(config['evaluator']['topk'])  # 取topk中的最大值（例如topk=[10,20,50]则max_k=50）
-      # 为每个输入生成max_k个候选bundle
-      text_samples = torch.zeros((input_ids.shape[0], max_k, stride_length*num_strides), dtype=torch.long)
-
-      # 对每个输入生成max_k个不同的候选bundle
-      for i in range(max_k):
-        # 使用半自回归采样生成bundle
-        _, intermediate_samples, _ = model.restore_model_and_semi_ar_sample(
-            input_ids=input_ids,  # 给定的前半部分作为条件
-            stride_length=stride_length,
-            num_strides=num_strides,
-            dt=1 / config.sampling.steps,
+      # Each draw starts from a full-MASK payload; no next block is appended.
+      for i in range(eval_num_samples):
+        generated_next_items = model.restore_model_and_sample_next_item(
+            input_ids=input_ids,
+            num_steps=config.sampling.steps,
             context_emb=context_emb,  # CFG context embedding (None if cfg_enabled=False)
+            mu_c=mu_c,
+            sigma_c2=sigma_c2,
+            sequence_mask=batch.get('sequence_mask'),
         )
 
-        gen_seq = torch.tensor(intermediate_samples[-1])  # 获取生成的序列
-        text_samples[:, i, :] = gen_seq  # 保存第i个候选
+        text_samples[:, i, :] = generated_next_items.detach().cpu()
 
       # 计算该批次的推荐指标
       result = evaluator.calculate_metrics(text_samples, labels)
@@ -338,11 +333,70 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
 
   print("output_results", output_results)
 
+  # Persist both metrics and the exact evaluation provenance. Official results
+  # must not exist only in a terminal scrollback.
+  results_path_value = config.eval.get('results_path', None)
+  results_path = (
+      Path(results_path_value).expanduser().resolve()
+      if results_path_value
+      else Path.cwd() / 'rec_eval_results.json')
+
+  def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as handle:
+      for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+  checkpoint_path = Path(config.eval.checkpoint_path).expanduser().resolve()
+  prepared_path_value = config.get('prepared_dataset_path', None)
+  prepared_manifest_path = (
+      Path(prepared_path_value).expanduser().resolve() / 'prepared_manifest.json'
+      if prepared_path_value else None)
+  payload = {
+      'result_schema': 'genplaylist-wp-c-rec-eval-v1',
+      'created_utc': datetime.now(timezone.utc).isoformat(),
+      'git_commit': config.eval.get('git_commit', None),
+      'checkpoint': {
+          'path': str(checkpoint_path),
+          'sha256': file_sha256(checkpoint_path),
+      },
+      'prepared_data': {
+          'path': str(Path(prepared_path_value).expanduser().resolve())
+          if prepared_path_value else None,
+          'manifest_sha256': (
+              file_sha256(prepared_manifest_path)
+              if prepared_manifest_path and prepared_manifest_path.is_file() else None),
+      },
+      'protocol': omegaconf.OmegaConf.to_container(
+          config.protocol, resolve=True),
+      'official_evaluation_contract': OFFICIAL_EVALUATION_PROTOCOL.as_dict(),
+      'evaluation': {
+          'test_examples': len(tokenized_dataset['test']),
+          'catalog_items': len(tokenizer.item_id_to_row),
+          'seed': int(config.seed),
+          'sampling_steps': int(config.sampling.steps),
+          'ema_enabled': not bool(config.eval.disable_ema),
+          'sampler': str(config.sampling.predictor),
+          'full_catalog_retrieval': True,
+          'matching': 'hungarian_clhe_5x5',
+          'official_protocol': not allow_protocol_override,
+      },
+      'metrics': dict(output_results),
+  }
+  results_path.parent.mkdir(parents=True, exist_ok=True)
+  temporary_path = results_path.with_name(results_path.name + '.tmp')
+  temporary_path.write_text(
+      json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+  os.replace(temporary_path, results_path)
+  print(f"Saved rec_eval results -> {results_path}")
+
   # 打印RVQ直接命中统计
   evaluator.print_rvq_hit_statistics()
 
   # 保存候选集缓存（仅在第一次运行时保存）
-  evaluator.save_candidate_cache()
+  if evaluator.predict_num_items is not None:
+    evaluator.save_candidate_cache()
 
   return output_results
 
@@ -460,14 +514,11 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
   # 创建训练数据加载器
   # 将HuggingFace Dataset包装为torch Dataset，使Lightning可以正确应用DistributedSampler
   train_batch_size = config.get('loader', {}).get('batch_size', config.get('train_batch_size', 64))
-  eval_batch_size = config.get('loader', {}).get('eval_batch_size', config.get('eval_batch_size', 32))
-
-  logger.info(f'Creating DataLoaders: train_batch_size={train_batch_size}, eval_batch_size={eval_batch_size}')
+  logger.info(f'Creating train DataLoader: train_batch_size={train_batch_size}')
   logger.info(f'Train dataset type: {type(tokenized_dataset["train"])}, length: {len(tokenized_dataset["train"])}')
 
   # 包装HuggingFace Dataset为torch Dataset
   train_dataset_wrapped = TorchDatasetWrapper(tokenized_dataset['train'])
-  valid_dataset_wrapped = TorchDatasetWrapper(tokenized_dataset['valid'])
 
   logger.info(f'Wrapped train dataset type: {type(train_dataset_wrapped)}')
 
@@ -476,17 +527,6 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
       batch_size=train_batch_size,
       shuffle=True,  # Lightning DDP会自动替换为DistributedSampler
       collate_fn=tokenizer.collate_fn['train'],
-      num_workers=0,
-      pin_memory=True,
-      persistent_workers=False
-  )
-
-  # 创建验证数据加载器
-  valid_ds = DataLoader(
-      valid_dataset_wrapped,  # 使用包装后的dataset
-      batch_size=eval_batch_size,
-      shuffle=False,
-      collate_fn=tokenizer.collate_fn['val'],
       num_workers=0,
       pin_memory=True,
       persistent_workers=False
@@ -501,9 +541,14 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
   model = diffusion.Diffusion(
     config, tokenizer)  # tokenizer=valid_ds
 
-  # 如果需要加载预训练权重（已注释）
-  # model.load_state_dict(
-  #   load_file(ckpt_path),strict=False)
+  warmstart_path = config.checkpointing.get('warmstart_path', None)
+  if warmstart_path:
+    if ckpt_path is not None:
+      raise ValueError(
+        'checkpointing.warmstart_path cannot be combined with an existing '
+        'resume checkpoint; warm-start begins a new optimizer/step history')
+    warmstart_report = apply_ddbc_warmstart(model, warmstart_path)
+    logger.info('Applied DDBC warm-start: %s', warmstart_report)
 
   # 创建Lightning Trainer
   trainer = hydra.utils.instantiate(
@@ -515,7 +560,10 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
 
   # 开始训练（自动处理训练循环、验证、checkpoint保存等）
   # 如果ckpt_path不为None，会自动从checkpoint恢复
-  trainer.fit(model, train_ds, valid_ds, ckpt_path=ckpt_path)
+  # There is deliberately no validation loader. The original val/test sources
+  # form one final test set whose five answers are hidden in labels and therefore
+  # cannot define a training-time target_mask loss. Checkpoints are step-based.
+  trainer.fit(model, train_ds, ckpt_path=ckpt_path)
 
   # 以下是旧版本的trainer代码（已注释）
   # Trainer
@@ -537,7 +585,7 @@ def main(config):
 
   整体流程：
   1. 设置随机种子
-  2. 加载原始数据集（train/valid/test）
+  2. 加载原始数据集（train/test；test 合并原 val/test 来源）
   3. 使用RQ-VAE将物品编码为离散token
   4. 根据mode参数执行不同任务：
      - train: 训练扩散模型
@@ -555,14 +603,20 @@ def main(config):
   logger = utils.get_logger(__name__)
 
   # ============ 第1步：加载数据集 ============
-  # 从datasets/{dataset_name}/目录加载train.txt、valid.txt、test.txt
+  # 从 split 文件加载 train，以及合并后的统一 test
   dataset = AbstractDataset(config)
-  split_datasets = dataset.split()  # 返回包含train/valid/test的字典
+  split_datasets = dataset.split()  # 返回包含 train/test 的字典
 
   # ============ 第2步：初始化分词器 ============
   # 分词器负责将bundle转换为token序列
   # 使用RQ-VAE将物品嵌入向量量化为离散码本索引
   tokenizer = dataloader.get_tokenizer(config, dataset)
+  if isinstance(tokenizer, GenPlaylistTokenizer):
+    expected_length = tokenizer.max_token_seq_len
+    if int(config.model.length) != expected_length:
+      raise ValueError(
+          f"Frozen GenPlaylist model.length is {expected_length}, "
+          f"got {config.model.length}")
 
   # ============ 第3步：对数据集进行分词 ============
   # 根据cir（components-to-items ratio）参数选择不同的分词策略：
@@ -570,7 +624,15 @@ def main(config):
   #   tokenized_datasets = tokenizer.raw_tokenize(split_datasets)
 
   # elif config['cir'] == 1: # 不将物品转换为组件，一个物品对应一个token序列
-  tokenized_datasets = tokenizer.tokenize(split_datasets)
+  prepared_path = config.get('prepared_dataset_path', None)
+  if prepared_path:
+    tokenized_datasets, prepared_manifest = load_prepared_tokenized_dataset(
+        prepared_path, config, dataset, tokenizer)
+    logger.info(
+        f"Loaded prepared dataset {prepared_manifest['prepared_data_version']} "
+        f"from {prepared_path}")
+  else:
+    tokenized_datasets = tokenizer.tokenize(split_datasets)
 
   # else: # cir为其他值（如3、5、10、15），将多个物品组合为一个组件
     # tokenized_datasets = tokenizer.transfor_tokenzie(split_datasets)
@@ -598,5 +660,3 @@ if __name__ == '__main__':
   # Python脚本入口点
   # 执行main函数，Hydra会自动解析命令行参数和配置文件
   main()
-
-

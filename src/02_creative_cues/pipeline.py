@@ -24,7 +24,7 @@ import cue_assign       # noqa: E402
 import cue_export       # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "00_data_schema"))
-from schema import CUE_TOKENS  # noqa: E402
+from schema import CUE_CANDIDATES_PER_ITEM  # noqa: E402
 
 
 def finish_from_raw(
@@ -38,9 +38,12 @@ def finish_from_raw(
     max_df_frac: float = 0.3,
     dedup_threshold: float = 0.92,
     rank_by: str = "idf",
-    num_cues: int = CUE_TOKENS,
+    num_cues: int = CUE_CANDIDATES_PER_ITEM,
     vocab_size: int = 2048,
     embedder: str = cue_normalize.DEFAULT_EMBEDDER,
+    assignment_strategy: str = "relevance",
+    candidate_k: int = 64,
+    export_scores: bool = False,
     block_tokens: Optional[set[str]] = None,
     verbose: bool = True,
 ):
@@ -48,10 +51,9 @@ def finish_from_raw(
 
     dedup_threshold: cosine above which two cues are merged in semantic dedup
                      (higher = fewer merges = larger vocabulary).
-    num_cues: cues assigned per song. A non-schema value (default CUE_TOKENS=6)
-              still validates and exports fine, but the output item2cues.json
-              only round-trips through CueMappingEntry.load_mapping() if that
-              loader is told the same n_cues.
+    num_cues: ranked candidates stored per song. Production stores 16 and WP-C
+              consumes the first 8; experimental values still validate when
+              readers are told the matching stored width.
     embedder: sentence-transformers model (or a cue_normalize.EMBEDDER_MODELS key)
               used for BOTH semantic dedup and assignment relevance. Passed to
               both build_vocab_normalized and assign_all here so cues and songs
@@ -63,9 +65,26 @@ def finish_from_raw(
         dedup_threshold=dedup_threshold, rank_by=rank_by, embedder=embedder,
         block_tokens=block_tokens, verbose=verbose)
     vocab, cue_emb = norm["vocab"], norm["embeddings"]
-    item2cues = cue_assign.assign_all(items, lyrics_proc, vocab, cue_emb,
-                                      n_cues=num_cues, embedder=embedder, verbose=verbose)
-    cue_export.export_outputs(vocab, item2cues, out_dir)
+    assigned = cue_assign.assign_all(
+        items, lyrics_proc, vocab, cue_emb, n_cues=num_cues,
+        candidate_k=candidate_k, strategy=assignment_strategy,
+        embedder=embedder, verbose=verbose, return_scores=export_scores)
+    if export_scores:
+        item2cues, score_mapping = assigned
+    else:
+        item2cues, score_mapping = assigned, None
+    cue_export.export_outputs(
+        vocab, item2cues, out_dir, score_mapping=score_mapping,
+        assignment_metadata={
+            "strategy": assignment_strategy,
+            "score": "cosine_similarity",
+            "ordering": (
+                "relevance_desc_then_cue_id_asc"
+                if assignment_strategy == "relevance" else "greedy_mmr"),
+            "candidate_k": candidate_k,
+            "embedder": embedder,
+            "fallback": "expand_to_n_then_unk_tail",
+        })
     return vocab, item2cues, norm["stats"], cue_emb
 
 
@@ -83,9 +102,12 @@ def build_vocab_and_assign(
     max_df_frac: float = 0.3,
     dedup_threshold: float = 0.92,
     rank_by: str = "idf",
-    num_cues: int = CUE_TOKENS,
+    num_cues: int = CUE_CANDIDATES_PER_ITEM,
     vocab_size: int = 2048,
     embedder: str = cue_normalize.DEFAULT_EMBEDDER,
+    assignment_strategy: str = "relevance",
+    candidate_k: int = 64,
+    export_scores: bool = False,
     block_tokens: Optional[set[str]] = None,
     verbose: bool = True,
 ):
@@ -107,4 +129,6 @@ def build_vocab_and_assign(
         method, raw, items, lyrics_proc, out_dir,
         min_df=min_df, max_df_frac=max_df_frac, dedup_threshold=dedup_threshold,
         rank_by=rank_by, num_cues=num_cues, vocab_size=vocab_size, embedder=embedder,
+        assignment_strategy=assignment_strategy, candidate_k=candidate_k,
+        export_scores=export_scores,
         block_tokens=block_tokens, verbose=verbose)

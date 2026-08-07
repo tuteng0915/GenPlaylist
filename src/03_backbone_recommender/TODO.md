@@ -1,91 +1,32 @@
-# 03_backbone_recommender — TODO (WP-D)
+# WP-C — status and remaining TODO
 
-**Owner:** Mentor
-**Goal:** Train and validate the dispersion-conditioned masked discrete diffusion model.
+## Implemented
 
-**Input:** `ContextPrefix` from WP-A · `item2cues.json` from WP-B
-**Output:** `GeneratedItem` (z_hat_emb, cue_ids, μ_C, σ²_C) → passed to `04_synthesis`
+- [x] Read `data/dataset/splits/{train,val,test}.txt` and preserve sparse IDs as strings.
+- [x] Expand all chronological prefixes into up-to-15-reference -> next-one training rows.
+- [x] Add the 13-token tokenizer with strict semantic/cue artifact checks.
+- [x] Emit context embeddings, `mu_c`, `sigma_c2`, attention mask, and target mask.
+- [x] Decode tokens to a validated `GeneratedItem` and 64-D reconstruction.
+- [x] Add `mu_c`/`sigma_c2` conditioning to DiT.
+- [x] Corrupt targets only and normalize loss by target-token count across the batch.
+- [x] Resolve codebook paths portably and provide a PyTorch attention fallback.
+- [x] Select the new tokenizer in the Spotify training config and pad variable-length batches.
+- [x] Exclude padded positions from attention keys with an explicit sequence mask.
+- [x] Apply the per-position legal-token mask in the shared model forward path.
+- [x] Enforce the shared GenPlaylist-v1 protocol constants at data/tokenizer startup.
+- [x] Require at least two references and expose a fixed one-item production sampler.
+- [x] Freeze test rows to 20 songs: 15 references plus five future targets.
+- [x] Draw five independent full-MASK next-one samples from the same context.
+- [x] Score predictions and targets with order-free 5x5 Hungarian matching.
+- [x] Replace production next-block sampling with explicit full-mask completion.
+- [x] Add semantic warm-start loading for the official 1,028-token DDBC Spotify checkpoint.
+- [x] Add extraction of the checkpoint's embedded CLHE/RVQ artifacts for the 5,119-item catalog.
 
----
+## Remaining / training blockers
 
-## dataset.py
-- [ ] Add NetEase Cloud Music playlist format (field mapping: playlist_id, track_list, metadata)
-- [ ] Unified filter: sequence length ≥ 5; split into context prefix + first held-out next item
-- [ ] Fill Table 1 dataset statistics: `#Playlists`, `#Songs`, `Avg. len`, `Avg. σ²_C`
-
----
-
-## tokenizer.py
-- [ ] Update RVQ params: `rq_n_codebooks=4`, `rq_codebook_size=128`
-- [ ] Update vocabulary layout → **vocab_size = 2691**
-  - BOS: 1 | RVQ L0–L3: 4×128=512 | Conflict: 128 | BOI: 1 | EOS: 1 | Creative Cues: 2048
-- [ ] Update `boi_token = 641`, `eos_token = 642`
-- [ ] Implement **12-token item stride**: `[BOI, z1, z2, z3, z4, z_conf, c1, c2, c3, c4, c5, c6]`
-- [ ] Load `02_creative_cues/outputs/item2cues.json`; map cue IDs to vocab offset (+643)
-- [ ] Fallback: if `item2cues.json` absent, fill cue positions with 0 (also used for `w/o cues` ablation)
-- [ ] Implement `make_type_mask(seq_len, stride=12)` — per-position legal token range for inference
-
----
-
-## playlist_structure.py
-- [ ] Switch embedding source from faiss weight matrix to real CLHE encoder output
-      once CLHE embeddings are available
-- [ ] Call `compute_playlist_structure()` inside `tokenizer.tokenize_function()`;
-      attach `mu_c` (tensor `[d]`) and `sigma_c2` (float) to each batch
-- [ ] Compute Q33/Q66 over training set; save to `{dataset_dir}/dispersion_tiers.json`
-- [ ] Use `get_dispersion_tier()` to label test samples as compact/medium/diverse (Table 3)
-
----
-
-## models/dit.py
-- [ ] Add `DispersionEmbedder`:
-  - `W_mu: nn.Linear(d_emb, d_hidden, bias=False)` + SiLU
-  - `W_sigma: nn.Linear(1, d_hidden, bias=False)` + SiLU
-- [ ] Change conditioning signal in `DIT.forward`:
-  `c = SiLU(W_τ·τ) + SiLU(W_μ·μ_C) + SiLU(W_{σ²}·σ²_C)`
-  replacing current CFG embedding path
-- [ ] Update `configs/config.yaml`: add `dispersion_cond: true`, `centroid_dim: 512`
-
----
-
-## diffusion.py
-- [ ] **Forward corruption**: exclude seed token positions from absorbing mask
-      (only the target next-item slot is masked)
-- [ ] **Inference**: in `semi_ar_sample`, ensure seed positions are never unmasked
-- [ ] **Batch conditioning**: extract `mu_c [B, d]` and `sigma_c2 [B, 1]` from batch;
-      pass to `backbone.forward()`
-- [ ] **Type mask**: apply `make_type_mask()` at inference to filter illegal token logits
-- [ ] Add `generate_mode` to `main.py`: load checkpoint, run inference,
-      return `GeneratedItem` list for `pipeline/genplaylist.py`
-
----
-
-## evaluator.py
-- [ ] Integrate **MERT** (acoustic): `AutoModel.from_pretrained("m-a-p/MERT-v1-95M")`
-- [ ] Integrate **CLAP** (audio-language encoder)
-- [ ] Integrate **ImageBind** (cross-modal encoder)
-- [ ] Implement `compute_semantic_sim(gen_audio, gt_audio, encoder)` → cosine similarity
-- [ ] Compute GT upper bound: intra-set similarity of ground-truth playlists
-- [ ] Implement `compute_dispersion_match(seed_embs, gen_emb)` → Δσ²
-      (encode generated audio through CLHE first)
-- [ ] Implement `compute_centroid_distance(seed_embs, gen_emb)` → CD (for ablation table)
-- [ ] Integrate **FAD** (Fréchet Audio Distance); build genre/style reference sets
-- [ ] Implement **Condition CLAP**: `cos(CLAP(audio), CLAP(attributes_text + lyrics))`
-- [ ] Partition test results by compact/medium/diverse tier → Table 3
-
----
-
-## Ablation configs
-- [ ] `w/o disp.` — set `dispersion_cond: false` in config; c = SiLU(W_τ·τ) only
-- [ ] `w/o cues` — tokenizer fallback path (cue positions = 0); stride still 12
-- [ ] `w/o verbal.` — skip kNN lookup in verbalization; LLM receives title + seed metadata only
-- [ ] `w/o diffusion` (mean imputation) — use μ_C nearest-neighbor directly as ẑ_{t+1}
-
----
-
-## Baselines
-- [ ] **Pop**: global popularity rank; return top-1 embedding
-- [ ] **DDBC**: current code in decode-to-catalog mode (direct comparison baseline)
-- [ ] **DreamRec**: generate embedding → kNN retrieve from catalog
-- [ ] **ACE-Step-LLM**: skip diffusion; LLM + ACE-Step only (ablates the diffusion module)
-- [ ] **MusicGen-Text**: generate from playlist title only
+- [x] Run the verified checkpoint extractor and generate the final 16-stored/8-active cue artifacts.
+- [x] Thread structure conditions through full-mask completion sampling.
+- [ ] Train a new checkpoint; old checkpoints are structurally incompatible.
+- [x] Implement a lazy checkpoint-backed `run_backbone` adapter.
+- [ ] Validate the adapter against the newly trained server checkpoint.
+- [ ] Run retrieval, dispersion-tier, semantic-audio, and ablation evaluations.

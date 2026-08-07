@@ -140,13 +140,15 @@ class Diffusion(L.LightningModule):
 
     # generative perplexity
     self.gen_ppl_metric = Perplexity()
-    self.eval_model_tokenizer = transformers.AutoTokenizer.\
-      from_pretrained(self.gen_ppl_eval_model_name_or_path)
-    if self.eval_model_tokenizer.pad_token is None:
-      self.eval_model_tokenizer.pad_token =\
-          self.eval_model_tokenizer.eos_token
-      self.eval_model_tokenizer.pad_token_id =\
-          self.eval_model_tokenizer.eos_token_id
+    self.eval_model_tokenizer = None
+    if self.config.eval.compute_generative_perplexity:
+      self.eval_model_tokenizer = transformers.AutoTokenizer.\
+        from_pretrained(self.gen_ppl_eval_model_name_or_path)
+      if self.eval_model_tokenizer.pad_token is None:
+        self.eval_model_tokenizer.pad_token =\
+            self.eval_model_tokenizer.eos_token
+        self.eval_model_tokenizer.pad_token_id =\
+            self.eval_model_tokenizer.eos_token_id
 
     self.noise = noise_schedule.get_noise(self.config,
                                           dtype=self.dtype)
@@ -164,6 +166,7 @@ class Diffusion(L.LightningModule):
     self.neg_infinity = -1000000.0
     self.fast_forward_epochs = None
     self.fast_forward_batches = None
+    self._type_mask_cache = {}
     self._validate_configuration()
 
   def _validate_configuration(self):
@@ -257,12 +260,14 @@ class Diffusion(L.LightningModule):
       updated_dls.append(
         torch.utils.data.DataLoader(
           dl.dataset,
-          batch_size=self.config.loader.batch_size,
-          num_workers=self.config.loader.num_workers,
-          pin_memory=self.config.loader.pin_memory,
+          batch_size=dl.batch_size,
+          num_workers=dl.num_workers,
+          pin_memory=dl.pin_memory,
           sampler=dl_sampler,
           shuffle=False,
-          persistent_workers=True))
+          collate_fn=dl.collate_fn,
+          drop_last=dl.drop_last,
+          persistent_workers=(dl.persistent_workers if dl.num_workers > 0 else False)))
     self.trainer.fit_loop._combined_loader.flattened = updated_dls
 
   def optimizer_step(self, *args, **kwargs):
@@ -326,21 +331,28 @@ class Diffusion(L.LightningModule):
     assert sigma.ndim == 1, sigma.shape
     return sigma
 
-  def _apply_cfg_dropout(self, context_emb):
-    """训练时以 cfg_p_drop 概率将 context_emb 替换为 none_embedding（CFG dropout）。"""
-    if context_emb is None or not self.training:
-      return context_emb
-    p_drop = getattr(self.config.sampling, 'cfg_p_drop', 0.1)
-    B = context_emb.shape[0]
-    keep = (torch.rand(B, device=self.device) >= p_drop).float()[:, None]  # [B, 1]
-    none_emb = self.backbone.none_embedding.unsqueeze(0).expand(B, -1)     # [B, hidden]
-    return context_emb * keep + none_emb * (1 - keep)
-
-  def forward(self, x, sigma, context_emb=None):
+  def forward(
+      self, x, sigma, context_emb=None, mu_c=None, sigma_c2=None,
+      sequence_mask=None):
     """Returns log score."""
     sigma = self._process_sigma(sigma)
     with torch.cuda.amp.autocast(dtype=torch.float32): # la
-      logits = self.backbone(x, sigma, context_emb=context_emb)
+      logits = self.backbone(
+        x, sigma, context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2,
+        sequence_mask=sequence_mask)
+    if hasattr(self.tokenizer, 'make_type_mask'):
+      cache_key = (x.shape[1], logits.device.type, logits.device.index)
+      legal = self._type_mask_cache.get(cache_key)
+      if legal is None:
+        legal = torch.as_tensor(
+          self.tokenizer.make_type_mask(x.shape[1]),
+          dtype=torch.bool, device=logits.device)
+        self._type_mask_cache[cache_key] = legal
+      if legal.shape != logits.shape[1:]:
+        raise ValueError(
+          f'Type mask/logit mismatch: mask={tuple(legal.shape)}, '
+          f'logits={tuple(logits.shape)}')
+      logits = logits.masked_fill(~legal.unsqueeze(0), self.neg_infinity)
     
     if self.parameterization == 'subs':
       return self._subs_parameterization(logits=logits,
@@ -387,18 +399,27 @@ class Diffusion(L.LightningModule):
   def _compute_loss(self, batch, prefix):
     # CFG: extract context_emb from batch, apply dropout during training
     cfg_enabled = getattr(self.config.sampling, 'cfg_enabled', False)
-    cfg_encoder = getattr(self.config.sampling, 'cfg_encoder', False)
     context_emb = None
     if cfg_enabled:
       context_emb = batch.get('context_emb', None)
       if context_emb is not None:
         context_emb = context_emb.to(self.device).float()
-        if not cfg_encoder:
-          # mean-pool 模式：dropout 在这里处理
-          context_emb = self._apply_cfg_dropout(context_emb)
-        # encoder 模式：dropout 在 DIT.forward 内部处理
-    losses, preds = self._loss(batch['input_ids'], batch['attention_mask'],
-                               context_emb=context_emb)
+    target_mask = batch.get('target_mask', batch['attention_mask'])
+    sequence_mask = batch.get(
+      'sequence_mask', torch.ones_like(batch['input_ids'], dtype=torch.bool))
+    mu_c = batch.get('mu_c', None)
+    sigma_c2 = batch.get('sigma_c2', None)
+    if not getattr(self.config.sampling, 'structure_conditioning', True):
+      mu_c = None
+      sigma_c2 = None
+    if mu_c is not None:
+      mu_c = mu_c.to(self.device).float()
+    if sigma_c2 is not None:
+      sigma_c2 = sigma_c2.to(self.device).float()
+    losses, preds = self._loss(
+      batch['input_ids'], batch['attention_mask'], target_mask=target_mask,
+      context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2,
+      sequence_mask=sequence_mask)
     loss = losses.loss
 
 
@@ -419,7 +440,7 @@ class Diffusion(L.LightningModule):
     # 记录各 RVQ 层的未加权 NLL，帮助判断各层学习进度
     if losses.unweighted_nlls is not None:
       layer_stats = self._compute_layer_nll_stats(
-        batch['input_ids'], losses.unweighted_nlls)
+        batch['input_ids'], losses.unweighted_nlls, target_mask=target_mask)
       self.log_dict(
         {f'{prefix}/{k}': v for k, v in layer_stats.items()},
         on_step=(prefix == 'train'),
@@ -679,9 +700,7 @@ class Diffusion(L.LightningModule):
     # result[:,0] = self.bos_index
     # result[:,-1] = self.eos_index
 
-    # k = stride per item = BOI + n_digit + 1 conflict
-    # 3 codebooks: k=5, 4 codebooks: k=6
-    k = self.tokenizer.n_digit + 2
+    k = getattr(self.tokenizer, 'tokens_per_item', self.tokenizer.n_digit + 2)
     n = total_len //k
     ni = total_len % k
     for b in range(result.shape[0]):
@@ -694,7 +713,7 @@ class Diffusion(L.LightningModule):
               token_list.extend([self.boi_index]+[self.mask_index] * (k-1)) 
             token_list.append(self.eos_index)
 
-        elif ni==0 or ni==4:
+        elif not hasattr(self.tokenizer, 'make_type_mask') and (ni==0 or ni==4):
             # [BOS] ... [EOS] [BOS] ... [EOS]
             half_n = math.ceil(n // 2) #  for input/output=1:1
             token_list.append(self.bos_index)
@@ -734,6 +753,20 @@ class Diffusion(L.LightningModule):
    """
 
     masked_values = values.clone()
+    if hasattr(tokenizer, 'make_type_mask'):
+      legal_by_position = torch.as_tensor(
+        tokenizer.make_type_mask(masked_values.size(1)),
+        dtype=torch.bool, device=values.device)
+      active_positions = (
+        torch.ones_like(current_x, dtype=torch.bool)
+        if force_all_positions else current_x == self.mask_index)
+      illegal = (~legal_by_position).unsqueeze(0) & active_positions.unsqueeze(-1)
+      if is_logits:
+        return masked_values.masked_fill(illegal, float('-inf'))
+      masked_values = masked_values.masked_fill(illegal, 0.0)
+      denominator = masked_values.sum(dim=-1, keepdim=True).clamp_min(1e-10)
+      return masked_values / denominator
+
     codebook_size = tokenizer.config['rq_codebook_size']
     seq_len = masked_values.size(1)
     vocab_size = masked_values.size(-1)
@@ -1098,14 +1131,15 @@ class Diffusion(L.LightningModule):
     """
     为序列每个 token 位置计算 loss 权重，根据其在 item 内的角色。
 
-    Token 结构（以 n_codebooks=3 为例）：
-      [BOS, BOI, d0, d1, d2, conflict, BOI, d0, d1, d2, conflict, ..., EOS]
-      period = n_codebooks + 2
+    Token 结构（GenPlaylist v1）：
+      [BOS, BOI, d0, d1, d2, conflict, c0, c1, c2, c3, c4, c5, c6, c7, ..., EOS]
+      period = tokenizer.tokens_per_item = 13
 
     offset 与角色对应：
       offset 0           → BOI（special token，不会被 mask，权重为 1.0 但不影响 loss）
       offset 1..n        → RVQ Layer 0..n-1（按 rvq_weights 分配）
       offset n+1         → conflict digit（按 conflict_weight 分配）
+      later offsets      → creative cues（按 cue_weight 分配）
       pos 0              → BOS，special token，权重 1.0
       pos seq_len-1      → EOS，special token，权重 1.0
 
@@ -1113,10 +1147,11 @@ class Diffusion(L.LightningModule):
     """
     weight_cfg = self.config.training.layer_loss_weights
     n_codebooks = self.tokenizer.n_digit
-    period = n_codebooks + 2  # BOI + n RVQ layers + 1 conflict
+    period = self.tokenizer.tokens_per_item
 
     rvq_weights = list(weight_cfg.rvq_weights)
     conflict_weight = float(weight_cfg.conflict_weight)
+    cue_weight = float(weight_cfg.get('cue_weight', 1.0))
 
     # 若 rvq_weights 长度不足 n_codebooks，用最后一个值补充
     while len(rvq_weights) < n_codebooks:
@@ -1131,25 +1166,27 @@ class Diffusion(L.LightningModule):
         pass  # BOI，保持 1.0
       elif 1 <= offset <= n_codebooks:
         weights[:, pos] = rvq_weights[offset - 1]
-      else:
-        # offset == n_codebooks + 1 → conflict digit
+      elif offset == n_codebooks + 1:
         weights[:, pos] = conflict_weight
+      else:
+        weights[:, pos] = cue_weight
 
     return weights
 
-  def _compute_layer_nll_stats(self, x0, unweighted_nlls):
+  def _compute_layer_nll_stats(self, x0, unweighted_nlls, target_mask=None):
     """
     按 token 类型（d0/d1/.../conflict）分别统计平均未加权 NLL。
 
     参数：
       x0: [batch, seq_len]  原始 token 序列（用于定位各层 token 位置）
       unweighted_nlls: [batch, seq_len]  未加权的 per-token loss
+      target_mask: [batch, seq_len]  只统计 next-item payload；None 仅用于兼容
 
     返回：
       dict，key 为 'layer_nll/d{i}' 和 'layer_nll/conflict'，value 为标量 tensor
     """
     n_codebooks = self.tokenizer.n_digit
-    period = n_codebooks + 2
+    period = self.tokenizer.tokens_per_item
     seq_len = x0.shape[1]
     stats = {}
 
@@ -1157,20 +1194,38 @@ class Diffusion(L.LightningModule):
     positions = torch.arange(1, seq_len, device=x0.device)  # 跳过 BOS（pos 0）
     offsets = (positions - 1) % period  # 每个位置在 item 内的偏移
 
+    if target_mask is not None:
+      target_mask = target_mask.to(device=x0.device, dtype=torch.bool)
+      if target_mask.shape != x0.shape:
+        raise ValueError(
+          f'target_mask shape {tuple(target_mask.shape)} does not match '
+          f'x0 {tuple(x0.shape)}')
+
+    def masked_position_mean(column_mask):
+      values = unweighted_nlls[:, 1:][:, column_mask]
+      if target_mask is None:
+        return values.mean() if values.numel() > 0 else None
+      selected = target_mask[:, 1:][:, column_mask]
+      return values[selected].mean() if bool(selected.any()) else None
+
     for layer_idx in range(n_codebooks):
       target_offset = layer_idx + 1  # d{layer_idx} 的偏移
       col_mask = (offsets == target_offset)  # shape: [seq_len-1]
-      # 扩展到 [batch, seq_len]，只取 pos 1 到 seq_len-1 的列
-      layer_nlls = unweighted_nlls[:, 1:][: , col_mask]  # [batch, n_positions]
-      if layer_nlls.numel() > 0:
-        stats[f'layer_nll/d{layer_idx}'] = layer_nlls.mean()
+      layer_mean = masked_position_mean(col_mask)
+      if layer_mean is not None:
+        stats[f'layer_nll/d{layer_idx}'] = layer_mean
 
     # conflict digit：offset = n_codebooks + 1
     conflict_offset = n_codebooks + 1
     col_mask = (offsets == conflict_offset)
-    conflict_nlls = unweighted_nlls[:, 1:][:, col_mask]
-    if conflict_nlls.numel() > 0:
-      stats['layer_nll/conflict'] = conflict_nlls.mean()
+    conflict_mean = masked_position_mean(col_mask)
+    if conflict_mean is not None:
+      stats['layer_nll/conflict'] = conflict_mean
+
+    cue_mask = offsets > conflict_offset
+    cue_mean = masked_position_mean(cue_mask)
+    if cue_mean is not None:
+      stats['layer_nll/cues'] = cue_mean
 
     return stats
 
@@ -1185,7 +1240,9 @@ class Diffusion(L.LightningModule):
                           dim=-1,
                           index=x0[:, :, None]).squeeze(-1)
 
-  def _forward_pass_diffusion(self, x0, attention_mask, context_emb=None):
+  def _forward_pass_diffusion(
+      self, x0, attention_mask, target_mask=None, context_emb=None,
+      mu_c=None, sigma_c2=None, sequence_mask=None):
     
     t = self._sample_t(x0.shape[0], x0.device)
     if self.T > 0:
@@ -1207,8 +1264,12 @@ class Diffusion(L.LightningModule):
     special_ids = torch.tensor([self.eos_index,  self.bos_index,self.boi_index], device=x0.device) #
     special_mask = torch.isin(x0, special_ids)
     move_chance = move_chance.masked_fill(special_mask, 0.0)
+    if target_mask is not None:
+      move_chance = move_chance.masked_fill(~target_mask.bool(), 0.0)
     xt = self.q_xt(x0, move_chance)
-    model_output = self.forward(xt, unet_conditioning, context_emb=context_emb)
+    model_output = self.forward(
+      xt, unet_conditioning, context_emb=context_emb,
+      mu_c=mu_c, sigma_c2=sigma_c2, sequence_mask=sequence_mask)
     utils.print_nans(model_output,'model_output')
 
     # if self.parameterization == 'sedd':
@@ -1238,7 +1299,9 @@ class Diffusion(L.LightningModule):
     return - log_p_theta * (
       dsigma / torch.expm1(sigma))[:, None]
 
-  def _loss(self, x0, attention_mask, context_emb=None):
+  def _loss(
+      self, x0, attention_mask, target_mask=None, context_emb=None,
+      mu_c=None, sigma_c2=None, sequence_mask=None):
     (input_tokens, output_tokens,
      attention_mask) = self._maybe_sub_sample(
        x0, attention_mask)
@@ -1248,10 +1311,14 @@ class Diffusion(L.LightningModule):
       loss = - logprobs.gather(
         -1, output_tokens[:, :, None])[:, :, 0]
     else:
-      loss = self._forward_pass_diffusion(input_tokens, attention_mask, context_emb=context_emb)
+      loss = self._forward_pass_diffusion(
+        input_tokens, attention_mask, target_mask=target_mask,
+        context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2,
+        sequence_mask=sequence_mask)
       
     # print("loss",loss,loss.shape)
-    nlls = loss #* attention_mask
+    effective_mask = attention_mask.bool() if target_mask is None else target_mask.bool()
+    nlls = loss * effective_mask
 
     # 应用 RVQ 层级 loss 权重（如果启用）
     layer_weights_cfg = getattr(self.config.training, 'layer_loss_weights', None)
@@ -1259,14 +1326,12 @@ class Diffusion(L.LightningModule):
       pos_weights = self._compute_position_weights(input_tokens)
       nlls = nlls * pos_weights
 
-    count = loss.shape[1]# attention_mask.sum()
-
-    batch_nll = nlls.sum()
-    token_nll = batch_nll / count
+    count = effective_mask.sum().clamp_min(1)
+    token_nll = nlls.sum() / count
 
     return Loss(loss=token_nll,
                 nlls=nlls,
-                token_mask=attention_mask,
+                token_mask=effective_mask,
                 unweighted_nlls=loss.detach()), output_tokens
 
   def _score_entropy(self, log_score, sigma, xt, x0):
@@ -1308,13 +1373,229 @@ class Diffusion(L.LightningModule):
     entropy[masked_indices] += pos_term - neg_term + const
     return entropy
 
+  def build_next_item_completion(self, context_ids, sequence_mask=None):
+    """Append one explicit full-MASK item slot to a reference sequence batch.
+
+    Input rows are right-padded ``[BOS, reference items..., EOS]`` sequences.
+    Output rows are ``[BOS, references..., BOI, MASK x payload, EOS, padding]``.
+    Only payload positions are marked in ``completion_mask``; references, BOI,
+    EOS, and padding are immutable during reverse diffusion.
+    """
+    if context_ids.ndim != 2:
+      raise ValueError(
+        f'context_ids must be [batch, length], got {tuple(context_ids.shape)}')
+    if sequence_mask is None:
+      sequence_mask = torch.zeros_like(context_ids, dtype=torch.bool)
+      for row in range(context_ids.shape[0]):
+        eos_positions = torch.nonzero(
+          context_ids[row] == self.tokenizer.eos_token, as_tuple=False).flatten()
+        if eos_positions.numel() != 1:
+          raise ValueError(
+            f'Context row {row} must contain exactly one EOS, got '
+            f'{eos_positions.numel()}')
+        sequence_mask[row, :int(eos_positions[0].item()) + 1] = True
+    else:
+      sequence_mask = sequence_mask.to(
+        device=context_ids.device, dtype=torch.bool)
+      if sequence_mask.shape != context_ids.shape:
+        raise ValueError(
+          f'sequence_mask shape {tuple(sequence_mask.shape)} does not match '
+          f'context_ids {tuple(context_ids.shape)}')
+
+    lengths = sequence_mask.sum(dim=1)
+    tokens_per_item = self.tokenizer.tokens_per_item
+    prepared_rows = []
+    for row, length_tensor in enumerate(lengths):
+      length = int(length_tensor.item())
+      if length < 2 or not bool(sequence_mask[row, :length].all()) or bool(
+          sequence_mask[row, length:].any()):
+        raise ValueError(f'Context row {row} must use contiguous right padding')
+      completed_row, completion_row = self.tokenizer.build_next_item_completion(
+        context_ids[row, :length].detach().cpu().numpy())
+      prepared_rows.append((completed_row, completion_row))
+
+    output_length = max(len(completed_row) for completed_row, _ in prepared_rows)
+    model_length = int(getattr(self.config.model, 'length', output_length))
+    if output_length > model_length:
+      raise ValueError(
+        f'Completed sequence length {output_length} exceeds model length {model_length}')
+    padding_token = self.tokenizer.padding_token
+    completed = torch.full(
+      (context_ids.shape[0], output_length), padding_token,
+      dtype=context_ids.dtype, device=context_ids.device)
+    completion_mask = torch.zeros_like(completed, dtype=torch.bool)
+    completed_sequence_mask = torch.zeros_like(completed, dtype=torch.bool)
+
+    for row, (completed_row, completion_row) in enumerate(prepared_rows):
+      row_length = len(completed_row)
+      completed[row, :row_length] = torch.as_tensor(
+        completed_row, dtype=context_ids.dtype, device=context_ids.device)
+      completion_mask[row, :row_length] = torch.as_tensor(
+        completion_row, dtype=torch.bool, device=context_ids.device)
+      completed_sequence_mask[row, :row_length] = True
+
+    return completed, completion_mask, completed_sequence_mask
+
+
+  @torch.no_grad()
+  def sample_masked_completion(
+      self, masked_ids, completion_mask, num_steps, eps=1e-5,
+      context_emb=None, mu_c=None, sigma_c2=None, sequence_mask=None):
+    """Reverse diffuse only explicitly marked MASK positions in a full sequence."""
+    if self.parameterization != 'subs':
+      raise ValueError(
+        'Full-mask next-item completion currently requires SUBS parameterization')
+    if num_steps <= 0:
+      raise ValueError(f'num_steps must be positive, got {num_steps}')
+    if not 0 < eps < 1:
+      raise ValueError(f'eps must be between 0 and 1, got {eps}')
+    if masked_ids.ndim != 2:
+      raise ValueError(
+        f'masked_ids must be [batch, length], got {tuple(masked_ids.shape)}')
+    if completion_mask.shape != masked_ids.shape:
+      raise ValueError('completion_mask must have the same shape as masked_ids')
+
+    x = masked_ids.to(self.device).clone()
+    fixed_ids = x.clone()
+    completion_mask = completion_mask.to(self.device).bool()
+    if sequence_mask is None:
+      sequence_mask = torch.ones_like(x, dtype=torch.bool)
+    else:
+      sequence_mask = sequence_mask.to(self.device).bool()
+      if sequence_mask.shape != x.shape:
+        raise ValueError('sequence_mask must have the same shape as masked_ids')
+    if not bool(completion_mask.any(dim=1).all()):
+      raise ValueError('Every row needs at least one completion position')
+    if not bool((x[completion_mask] == self.mask_index).all()):
+      raise ValueError('Every completion position must initially contain MASK')
+    if bool((x[~completion_mask] == self.mask_index).any()):
+      raise ValueError('MASK tokens outside completion_mask are not allowed')
+    if bool((completion_mask & ~sequence_mask).any()):
+      raise ValueError('Completion positions cannot be padding')
+
+    n_samples = x.shape[0]
+    ones = torch.ones(n_samples, dtype=self.dtype, device=self.device)
+
+    def prepare_condition(value):
+      if value is None:
+        return None
+      value = value.to(self.device).float()
+      if value.shape[0] != n_samples:
+        raise ValueError(
+          f'Condition batch size {value.shape[0]} does not match {n_samples}')
+      return value
+
+    context_emb = prepare_condition(context_emb)
+    mu_c = prepare_condition(mu_c)
+    sigma_c2 = prepare_condition(sigma_c2)
+    cfg_enabled = getattr(self.config.sampling, 'cfg_enabled', False)
+    if not cfg_enabled:
+      context_emb = None
+    if not getattr(self.config.sampling, 'structure_conditioning', True):
+      mu_c = None
+      sigma_c2 = None
+    cfg_w = getattr(self.config.sampling, 'cfg_w', 1.0)
+    use_cfg = cfg_enabled and context_emb is not None and cfg_w != 1.0
+
+    def clean_distribution(current_x, timestep):
+      sigma_t, _ = self.noise(timestep)
+      if use_cfg:
+        log_p_cond = self.forward(
+          current_x, sigma_t, context_emb=context_emb,
+          mu_c=mu_c, sigma_c2=sigma_c2, sequence_mask=sequence_mask)
+        log_p_uncond = self.forward(
+          current_x, sigma_t, context_emb=None,
+          mu_c=mu_c, sigma_c2=sigma_c2, sequence_mask=sequence_mask)
+        guided = log_p_uncond + cfg_w * (log_p_cond - log_p_uncond)
+        return (guided - guided.logsumexp(dim=-1, keepdim=True)).exp()
+      return self.forward(
+        current_x, sigma_t, context_emb=context_emb,
+        mu_c=mu_c, sigma_c2=sigma_c2, sequence_mask=sequence_mask).exp()
+
+    timesteps = torch.linspace(
+      1.0, eps, num_steps + 1, device=self.device, dtype=self.dtype)
+    p_x0_cache = None
+    for step in range(num_steps):
+      t = timesteps[step] * ones
+      s = timesteps[step + 1] * ones
+      if p_x0_cache is None:
+        p_x0_cache = clean_distribution(x, t)
+      sigma_t, _ = self.noise(t)
+      sigma_s, _ = self.noise(s)
+      move_chance_t = (1 - torch.exp(-sigma_t))[:, None, None]
+      move_chance_s = (1 - torch.exp(-sigma_s))[:, None, None]
+      q_xs = p_x0_cache * (move_chance_t - move_chance_s)
+      q_xs[:, :, self.mask_index] = move_chance_s[:, :, 0]
+      proposed = _sample_categorical(q_xs)
+      x_next = torch.where(x == self.mask_index, proposed, x)
+      # This explicit assignment is the inpainting contract. It protects known
+      # references even if another parameterization changes copy semantics.
+      x_next = torch.where(completion_mask, x_next, fixed_ids)
+      if not torch.equal(x_next, x) or self.time_conditioning:
+        p_x0_cache = None
+      x = x_next
+
+    remaining = completion_mask & (x == self.mask_index)
+    if bool(remaining.any()):
+      final_t = eps * ones
+      final_p_x0 = clean_distribution(x, final_t)
+      final_tokens = final_p_x0.argmax(dim=-1)
+      x = torch.where(remaining, final_tokens, x)
+    x = torch.where(completion_mask, x, fixed_ids)
+    if bool((x[completion_mask] == self.mask_index).any()):
+      raise RuntimeError('Masked completion ended with unresolved MASK tokens')
+    return x
+
+
+  def extract_next_item_completion(self, completed_ids, completion_mask):
+    """Extract ``[BOS, BOI, payload, EOS]`` from completed full sequences."""
+    if completed_ids.shape != completion_mask.shape:
+      raise ValueError('completed_ids and completion_mask shapes differ')
+    rows = []
+    expected_payload = self.tokenizer.tokens_per_item - 1
+    for row in range(completed_ids.shape[0]):
+      positions = torch.nonzero(completion_mask[row], as_tuple=False).flatten()
+      if positions.numel() != expected_payload:
+        raise ValueError(
+          f'Row {row} has {positions.numel()} payload positions; '
+          f'expected {expected_payload}')
+      start = int(positions[0].item())
+      expected = torch.arange(
+        start, start + expected_payload, device=positions.device)
+      if not torch.equal(positions, expected):
+        raise ValueError(f'Row {row} completion positions are not contiguous')
+      item_with_boundaries = completed_ids[
+        row, start - 1:start + expected_payload + 1]
+      bos = torch.as_tensor(
+        [self.tokenizer.bos_token], dtype=completed_ids.dtype,
+        device=completed_ids.device)
+      rows.append(torch.cat((bos, item_with_boundaries)))
+    return torch.stack(rows)
+
+
   @torch.no_grad
   def sample_subs_guidance(
     self, input_ids, stride_length, num_strides, dt=0.001,
-    context_emb=None):  # context_emb: [B, hidden] or None
+    context_emb=None, mu_c=None, sigma_c2=None):
     n_samples = input_ids.shape[0]
     ones = torch.ones(n_samples, dtype=self.dtype,
                       device=self.device)
+
+    def prepare_condition(value):
+      if value is None:
+        return None
+      value = value.to(self.device).float()
+      if value.shape[0] != n_samples:
+        raise ValueError(
+          f'Condition batch size {value.shape[0]} does not match {n_samples} samples')
+      return value
+
+    context_emb = prepare_condition(context_emb)
+    mu_c = prepare_condition(mu_c)
+    sigma_c2 = prepare_condition(sigma_c2)
+    if not getattr(self.config.sampling, 'structure_conditioning', True):
+      mu_c = None
+      sigma_c2 = None
 
     cfg_enabled = getattr(self.config.sampling, 'cfg_enabled', False)
     cfg_w = getattr(self.config.sampling, 'cfg_w', 1.0)
@@ -1345,19 +1626,26 @@ class Diffusion(L.LightningModule):
       for i in range(num_steps + 1):
         # When cfg_enabled, pre-compute p_x0 here so _ddpm_caching_update
         # never calls self.forward internally (it skips forward when p_x0 is given)
-        if p_x0_cache is None and cfg_enabled:
+        if p_x0_cache is None and (
+            cfg_enabled or context_emb is not None or mu_c is not None or sigma_c2 is not None):
           t_now = (1 - i * dt) * ones
           sigma_t, _ = self.noise(t_now)
           if use_cfg:
             # Two-pass CFG: geometric interpolation in log-prob space
-            log_p_cond   = self.forward(x, sigma_t, context_emb=context_emb)
-            log_p_uncond = self.forward(x, sigma_t, context_emb=None)
+            log_p_cond = self.forward(
+              x, sigma_t, context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2)
+            # CFG drops only the optional prefix encoder; playlist structure is
+            # retained because training does not drop mu_c/sigma_c2.
+            log_p_uncond = self.forward(
+              x, sigma_t, context_emb=None, mu_c=mu_c, sigma_c2=sigma_c2)
             log_p_guided = log_p_uncond + cfg_w * (log_p_cond - log_p_uncond)
             log_p_guided = log_p_guided - log_p_guided.logsumexp(dim=-1, keepdim=True)
             p_x0_cache = log_p_guided.exp()
           else:
             # cfg_w == 1.0: conditioned-only, single forward pass
-            p_x0_cache = self.forward(x, sigma_t, context_emb=context_emb).exp()
+            p_x0_cache = self.forward(
+              x, sigma_t, context_emb=context_emb,
+              mu_c=mu_c, sigma_c2=sigma_c2).exp()
 
         p_x0_cache, x_next = self._ddpm_caching_update(
           x=x, t=(1 - i * dt) * ones, dt=dt, p_x0=p_x0_cache)
@@ -1370,13 +1658,17 @@ class Diffusion(L.LightningModule):
 
       # Apply final denoising step with illegal mask
       if use_cfg:
-        log_p_cond   = self.forward(x, 0 * ones, context_emb=context_emb)
-        log_p_uncond = self.forward(x, 0 * ones, context_emb=None)
+        log_p_cond = self.forward(
+          x, 0 * ones, context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2)
+        log_p_uncond = self.forward(
+          x, 0 * ones, context_emb=None, mu_c=mu_c, sigma_c2=sigma_c2)
         log_p_guided = log_p_uncond + cfg_w * (log_p_cond - log_p_uncond)
         logits = log_p_guided
       else:
-        logits = self.forward(x, 0 * ones,
-                              context_emb=context_emb if cfg_enabled else None)
+        logits = self.forward(
+          x, 0 * ones,
+          context_emb=context_emb if cfg_enabled else None,
+          mu_c=mu_c, sigma_c2=sigma_c2)
 
       # Apply illegal mask to ensure valid token generation
       # Now x is a continuous sequence: [BOS, context_items..., masked_items..., EOS]
@@ -1439,9 +1731,43 @@ class Diffusion(L.LightningModule):
             sequence_lengths)
 
 
+  def restore_model_and_sample_next_item(
+      self, input_ids, num_steps, eps=1e-5, context_emb=None,
+      mu_c=None, sigma_c2=None, sequence_mask=None):
+    """Generate one item by full-MASK completion, without next-block sampling."""
+    backbone_was_training = self.backbone.training
+    noise_was_training = self.noise.training
+    if self.ema:
+      self.ema.store(itertools.chain(
+        self.backbone.parameters(), self.noise.parameters()))
+      self.ema.copy_to(itertools.chain(
+        self.backbone.parameters(), self.noise.parameters()))
+    self.backbone.eval()
+    self.noise.eval()
+    try:
+      masked_ids, completion_mask, completed_sequence_mask = (
+        self.build_next_item_completion(input_ids, sequence_mask=sequence_mask))
+      completed_ids = self.sample_masked_completion(
+        masked_ids=masked_ids,
+        completion_mask=completion_mask,
+        num_steps=num_steps,
+        eps=eps,
+        context_emb=context_emb,
+        mu_c=mu_c,
+        sigma_c2=sigma_c2,
+        sequence_mask=completed_sequence_mask)
+      return self.extract_next_item_completion(completed_ids, completion_mask)
+    finally:
+      if self.ema:
+        self.ema.restore(itertools.chain(
+          self.backbone.parameters(), self.noise.parameters()))
+      self.backbone.train(backbone_was_training)
+      self.noise.train(noise_was_training)
+
+
   def restore_model_and_semi_ar_sample(
       self, input_ids, stride_length, num_strides, dt=0.001,
-      context_emb=None):  # context_emb: [B, hidden] or None
+      context_emb=None, mu_c=None, sigma_c2=None):
     """Generate samples from the model."""
     # Lightning auto-casting is not working in this method for some reason
     if self.ema:
@@ -1459,7 +1785,9 @@ class Diffusion(L.LightningModule):
        stride_length=stride_length,
        num_strides=num_strides,
        dt=dt,
-       context_emb=context_emb)
+       context_emb=context_emb,
+       mu_c=mu_c,
+       sigma_c2=sigma_c2)
     if self.ema:
       self.ema.restore(itertools.chain(
         self.backbone.parameters(),

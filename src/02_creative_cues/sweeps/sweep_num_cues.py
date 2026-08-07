@@ -4,10 +4,10 @@ Assigns N cues per song (N over a grid, N may exceed the usual 6), decodes lyric
 from them, and scores the reconstruction against the real lyrics. Answers "does
 giving the decoder more cues improve reconstruction, and where does it plateau?".
 
-Additive / non-invasive: it does NOT use CueMappingEntry (which fixes 6 cues) — it
+Additive / non-invasive: it does NOT use CueMappingEntry (which fixes 8 cues) — it
 works with raw cue-string lists and feeds them to cue_eval.level3_reconstruction,
 which already accepts an arbitrary {item_id: [cues]} mapping. The schema contract
-(6 cues) is untouched.
+(8 cues) is untouched.
 
 Requires OPENAI_API_KEY (the decoder). One decode call per (N, song); cheap on
 gpt-4o-mini and cached by prompt hash.

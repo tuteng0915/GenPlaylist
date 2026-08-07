@@ -1,0 +1,36 @@
+{
+  "frozen": true,
+  "seed": 42,
+  "n_playlists": {
+    "total": 6585,
+    "train": 5269,
+    "val": 658,
+    "test": 658
+  },
+  "n_unique_items": {
+    "total": 5077,
+    "train": 5077,
+    "val": 4535,
+    "test": 4529
+  },
+  "playlist_length": {
+    "min": 9,
+    "max": 60,
+    "avg": 28.5
+  },
+  "item_freq": {
+    "min": 10,
+    "max": 317,
+    "median": 25
+  },
+  "min_complete_per_playlist": 5,
+  "split_fractions": {
+    "train": 0.8,
+    "val": 0.1,
+    "test": 0.1
+  },
+  "sources": {
+    "catalog": "/Users/tut/Documents/Research/GenPlaylist/GenPlaylist_Code/data/final/catalog.json",
+    "playlists": "/Users/tut/Documents/Research/GenPlaylist/GenPlaylist_Code/data/playlists/final_subset_v2/playlists.txt"
+  }
+}

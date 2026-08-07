@@ -4,12 +4,10 @@ Production runs shouldn't need a wall of CLI flags — pick a preset by name and
 everything else is fixed here. Add a new preset (or tweak DEFAULT) when a
 setting changes, instead of adding a new flag.
 
-The DEFAULT preset reflects what the rank-by / min-df / cue-count comparisons
-in this project concluded (see METHOD_WRITEUP.md and the run reports under
-outputs/runs/): `idf` ranking held its own against `cluster` and `band` on
-vocab health and reconstruction quality, `llm` extraction produced the most
-diverse and coherent cues of the four methods, and 18 cues/song is the budget
-those comparisons were run and validated at.
+The DEFAULT preset is the cross-WP production contract.  Experimental settings
+remain available as explicitly named presets, but must never silently become
+the artifacts consumed by WP-C. The manifest key ``wp_d_compatible`` retains
+its legacy name for artifact backward compatibility.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "00_data_schema"))
-from schema import CUE_VOCAB_SIZE  # noqa: E402
+from schema import CUE_CANDIDATES_PER_ITEM, CUE_TOKENS, CUE_VOCAB_SIZE  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -46,10 +44,13 @@ class ProductionConfig:
     rank_by: str = "idf"                # stage-5 vocabulary selection rule
     vocab_size: int = CUE_VOCAB_SIZE    # 2048; do not change without 00_data_schema sign-off
 
-    # Step 3 — assignment
-    num_cues: int = 18                  # cues assigned per song (schema default is 6 — see
-                                         # METHOD_WRITEUP.md's non-default-cue-count note; this
-                                         # preset intentionally uses the validated 18-cue budget)
+    # Step 3 — assignment. Store a ranked master list; WP-C consumes its first
+    # CUE_TOKENS entries so cue-count ablations never rebuild the mapping.
+    num_cues: int = CUE_CANDIDATES_PER_ITEM
+    active_cues: int = CUE_TOKENS
+    assignment_strategy: str = "relevance"
+    candidate_k: int = 64
+    embedder: str = "minilm"
 
     force: bool = False                 # bypass extraction/cleaning caches
 
@@ -61,7 +62,9 @@ DEFAULT = ProductionConfig()
 PRESETS: dict[str, ProductionConfig] = {
     "default": DEFAULT,
     "tfidf": replace(DEFAULT, method="tfidf"),
-    "schema-default-cues": replace(DEFAULT, num_cues=6),
+    # Paper/ablation compatibility only. It does not match the frozen 16-row
+    # master-table contract and is therefore marked non-production.
+    "research-18-cues": replace(DEFAULT, num_cues=18),
 }
 
 

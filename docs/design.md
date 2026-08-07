@@ -1,6 +1,6 @@
 # GenPlaylist — Architecture & Design Document
 
-> **Status**: Pre-implementation design. Decisions confirmed in discussion; code not yet written.
+> **Status**: Implementation contract. Server artifacts and checkpoint validation remain pending.
 > **Base**: DDBC-Seq codebase (copied into `GenPlaylist_Code/`)
 
 ---
@@ -12,7 +12,7 @@ GenPlaylist extends DDBC's discrete diffusion framework toward **reference-based
 The full pipeline:
 
 ```
-Reference set C = {m_1, ..., m_k}
+Ordered references C = (m_1, ..., m_t), t ≥ 2
   │
   ├─ CLHE encode ──────────────────────────────────────────────────────┐
   │   E(m) ∈ R^64  (CLHE backbone, frozen)                             │
@@ -23,11 +23,12 @@ Reference set C = {m_1, ..., m_k}
   │                                                                     │
   ├─ RVQ discretize ────────────────────────────────────────────────────┤
   │   E(m) → z(m) = (z1, z2, z3, z_conf)  [L=3, K=256, 1-indexed]     │
-  │   + assign 6 creative cue tokens per item  (WP-B)                  │
+  │   + store 16 ranked cues; activate first 8 per item (WP-B)         │
   │                                                                     │
   ├─ Dispersion-conditioned masked diffusion ───────────────────────────┤
-  │   conditioning: seed tokens (fixed) + μ_C, σ²_C (injected)        │
-  │   output: next-item token sequence [z1, z2, z3, z_conf, c1..c6]   │
+  │   conditioning: reference tokens (fixed) + μ_C, σ²_C (injected)   │
+  │   target input: [BOI, MASK×12, EOS]; jointly denoise MASK payload │
+  │   output: next-item token sequence [z1, z2, z3, z_conf, c1..c8]   │
   │                                                                     │
   └─ Prompt construction + synthesis ───────────────────────────────────┘
       decode RVQ → Ê(m); kNN lookup in catalog CLHE space
@@ -53,21 +54,21 @@ Verbalization does not use a separate text encoder — instead, the generated la
 
 ### 2.2 Token Sequence per Item
 
-After RVQ quantization + creative cue assignment, each item occupies **11 token slots** in the sequence:
+After RVQ quantization + creative cue assignment, each item occupies **13 token slots** in the sequence:
 
 ```
-[BOI, z1, z2, z3, z_conf, c1, c2, c3, c4, c5, c6]
-  ↑                  ↑         ↑
-BOI token     conflict digit   6 creative cue tokens
+[BOI, z1, z2, z3, z_conf, c1, c2, c3, c4, c5, c6, c7, c8]
+  ↑                  ↑               ↑
+BOI token     conflict digit   8 creative cue tokens
 ```
 
-Stride `k = 11`. RVQ codes are **1-indexed** (z1 ∈ [1,256], z2 ∈ [257,512], z3 ∈ [513,768]); `z_conf` is a separate conflict-avoidance digit (74 observed values, range 769–842).
+Stride `k = 13`. RVQ codes are **1-indexed** (z1 ∈ [1,256], z2 ∈ [257,512], z3 ∈ [513,768]); `z_conf` is a separate conflict-avoidance digit (74 observed values, range 769–842).
 
 Full sequence structure:
 
 ```
-[BOS,  BOI, z1..z3, z_conf, c1..c6,  BOI, z1..z3, z_conf, c1..c6, ..., EOS]
-  ↑    ←──── item 1 (k=11) ─────────→  ←──── item 2 ──────────────→      ↑
+[BOS,  BOI, z1..z3, z_conf, c1..c8,  BOI, z1..z3, z_conf, c1..c8, ..., EOS]
+  ↑    ←──── item 1 (k=13) ─────────→  ←──── item 2 ──────────────→      ↑
 pos 0                                                                   pos L-1
 ```
 
@@ -92,7 +93,7 @@ Note: CLHE codes are 1-indexed; embedding reconstruction uses `weight[code - 1]`
 
 ### 3.1 What is injected
 
-For each playlist / training sequence, two scalars characterize the seed set `C`:
+For each training prefix, two quantities characterize the reference set `C`:
 
 ```
 μ_C  = (1/|C|) Σ E(m)          centroid vector ∈ R^(d_c + d_t)
@@ -121,9 +122,17 @@ This allows a single model to produce tight continuations (low σ²_C) or divers
 
 ### 3.3 Training
 
-- Seed tokens are **never masked** (fixed context), identical to DDBC.
-- σ²_C and μ_C are computed from the seed items in each training batch.
+- Reference tokens are **never masked** (fixed context), identical to DDBC.
+- Every chronological prefix becomes a next-one example with at most 15 recent
+  references and exactly one target (16 songs total).
+- Training samples require at least two references plus one target.
+- σ²_C and μ_C are computed from the reference items in each training batch.
 - Passed through `_forward_pass_diffusion` → `forward` → DIT.
+
+Inference uses the same full sequence layout as training. It appends one target
+slot whose twelve payload positions are all MASK, then jointly reverse-denoises
+that completion mask. The legacy DDBC next-block/semi-AR loop is not used by
+the production next-song path.
 
 ---
 
@@ -131,7 +140,7 @@ This allows a single model to produce tight continuations (low σ²_C) or divers
 
 ### 4.1 Motivation
 
-Beyond RVQ codes (which capture acoustic/semantic structure), each generated item carries **6 creative cue tokens** — discrete tokens representing lyrical imagery, themes, motifs, and cultural references. These serve as:
+Beyond RVQ codes (which capture acoustic/semantic structure), each generated item carries **8 creative cue tokens** — discrete tokens representing lyrical imagery, themes, motifs, and cultural references. These serve as:
 
 1. Part of the jointly-generated token sequence (diffusion generates them alongside RVQ codes)
 2. A lightweight verbalization signal (cue tokens → human-readable imagery words)
@@ -180,31 +189,34 @@ Output: `cues_raw.json` — `{item_id: ["train platform", "old photo", "broken p
 
 Output: `creative_cues_vocab.json` — `{cue_text: cue_id}` (2048 entries)
 
-**Step 4 — Per-item assignment (K=6)**
+**Step 4 — Per-item assignment (16 stored / 8 active)**
 
 ```python
 for each item:
     raw_cues → nearest vocab entry (sentence-BERT cosine)
     → sort by PMI(cue, item)
     → greedy diverse selection (pairwise distance > threshold)
-    → top-6 cue IDs
+    → top-16 relevance-ranked cue IDs; WP-C consumes the first 8
 ```
 
-Output: `item_cues.json` — `{item_id: [cue_id_1, ..., cue_id_6]}`
+Output: `item2cues.json` — `{item_id: [cue_id_1, ..., cue_id_16]}`
 
-### 4.3 Illegal mask update
+### 4.3 Position-type mask
 
-`_apply_illegal_mask` needs to handle cue positions. With stride k=12:
+For each item, let `offset = (pos - 1) % 13`. The production tokenizer and
+diffusion sampler use this table:
 
-| `pos % 12` | Token type | Legal range |
+| offset | Token type | Legal range |
 |---|---|---|
-| 1 | BOI | [641, 641] |
-| 2 | d0 | [1, 128] |
-| 3 | d1 | [129, 256] |
-| 4 | d2 | [257, 384] |
-| 5 | d3 | [385, 512] |
-| 0 | conflict | [513, 640] |
-| 6–11 | creative cues c1–c6 | [643, 2690] |
+| 0 | BOI | 843 |
+| 1 | z1 | 1–256 |
+| 2 | z2 | 257–512 |
+| 3 | z3 | 513–768 |
+| 4 | conflict | 769–842 |
+| 5–12 | creative cues c1–c8 | 845–2892 |
+
+Position 0 is BOS, the final position is EOS, and MASK is never a legal clean
+prediction.
 
 ---
 
@@ -213,14 +225,14 @@ Output: `item_cues.json` — `{item_id: [cue_id_1, ..., cue_id_6]}`
 After the diffusion generates new token sequences:
 
 ```
-generated tokens [z1, z2, z3, z_conf, c1..c6]
+generated tokens [z1, z2, z3, z_conf, c1..c8]
     ↓
 decode RVQ → Ê(m) = weight[z1-1] + weight[z2-1] + weight[z3-1]  ∈ R^64
     │
     ├─ kNN in catalog CLHE space (faiss IndexFlatIP)
     │   → top-k neighbors → metadata (title, artist, genre, mood, tempo, key, lyric_excerpt)
     │
-    ├─ creative cue tokens c1..c6 → cue vocabulary lookup → imagery words
+    ├─ creative cue tokens c1..c8 → cue vocabulary lookup → imagery words
     │
     └─ LLM (Qwen3) prompt assembly:
          neighbor metadata + cue words + playlist style summary (from μ_C kNN)
@@ -234,14 +246,32 @@ decode RVQ → Ê(m) = weight[z1-1] + weight[z2-1] + weight[z3-1]  ∈ R^64
 
 ## 6. Evaluation
 
-Retrieval metrics (Recall, Precision, Hit) are **dropped**. Generated music cannot overlap the catalog by design.
+WP-C evaluation is frozen independently of the WP-D audio demo:
+
+1. Keep test playlists with at least 20 songs and retain the first 20.
+2. Use songs 1–15 as the unchanged reference context and songs 16–20 as the
+   five ground-truth future songs.
+3. Independently full-mask-sample one next item five times; never feed a sample
+   back into the context.
+4. Retrieve predictions against the full 5,119-song catalog and solve the 5x5
+   prediction/target cosine matrix with Hungarian assignment.
+
+| WP-C metric | Description |
+|---|---|
+| Matched CLHE cosine ↑ | Mean cosine under optimal one-to-one 5x5 assignment |
+| Exact recall / precision / F1 ↑ | Multiset catalog-item overlap; duplicates receive no extra credit |
+| Any hit ↑ | Whether at least one of the five predictions matches |
+| Unique ratio ↑ | Unique retrieved predictions divided by five |
+
+WP-D synthesis/audio evaluation remains a separate later stage:
 
 | Metric | Description |
 |---|---|
 | FAD ↓ | Fréchet Audio Distance vs. held-out real music |
 | CLAP Score ↑ | Cosine similarity between generated audio CLAP embedding and lyric/attribute text |
-| Dispersion Match Δσ² ↓ | How well generated set matches seed playlist's σ²_C |
-| Centroid Distance CD ↓ | Distance between generated centroid and seed centroid |
+| Next-song semantic similarity ↑ | Similarity between generated audio and the held-out real next song |
+| Dispersion change error ↓ | Difference between adding the generated vs. real next song to the references |
+| Centroid shift error ↓ | Difference between generated and ground-truth next-song centroid shifts |
 | Human eval | Coherence / Music Quality / Overall Satisfaction (5-point Likert) |
 
 ---
@@ -252,10 +282,10 @@ Retrieval metrics (Recall, Precision, Hit) are **dropped**. Generated music cann
 |---|---|
 | `models/dit.py` | Add `disp_map`, `cent_map`; inject σ²_C, μ_C into conditioning |
 | `diffusion.py` | Pass μ_C, σ²_C through full call chain; generation not restricted to catalog items |
-| `tokenizer.py` | Vocab = 2894; stride k=11; L=3/K=256 RVQ (1-indexed); load `item2cues.json`; update illegal-mask table |
+| `tokenizer.py` | Vocab = 2894; stride k=13; L=3/K=256 RVQ (1-indexed); load `item2cues.json`; update illegal-mask table |
 | `dataset.py` | Compute μ_C, σ²_C per batch; filter: original length 30–90, freq≥10, post-filter 10–60 |
 | `evaluator.py` | Replace retrieval metrics with FAD, CLAP-Sim, Δσ², CD, MERT/CLAP/ImageBind semantic sim |
-| `configs/config.yaml` | vocab_size=2894, rq_n_codebooks=3, rq_codebook_size=256, stride=11, dispersion_cond=true |
+| `configs/config.yaml` | vocab_size=2894, rq_n_codebooks=3, rq_codebook_size=256, stride=13, dispersion_cond=true |
 | `verbalization.py` | kNN via faiss; LLM prompt assembly from cues + neighbor metadata; Qwen3 API call |
 | `synthesis.py` | ACE-Step frozen pipeline wrapper; style_ref_audio_path support |
 
@@ -269,10 +299,12 @@ Retrieval metrics (Recall, Precision, Hit) are **dropped**. Generated music cann
 | Embedding: CLHE backbone, frozen (clhe_weight.npy, 768×64) | ✓ |
 | RVQ: L=3 codebooks, K=256 entries, 1-indexed codes | ✓ |
 | Conflict digit z_conf: 74 observed values (range 769–842) | ✓ |
-| Token stride: k=11 per item | ✓ |
+| Token stride: k=13 per item | ✓ |
 | Vocab size: 2894 (incl. MASK token) | ✓ |
 | Creative cues vocab size: 2048 | ✓ |
-| K=6 cues per item | ✓ |
+| Stored cue candidates per item: 16, active prefix: 8 | ✓ |
+| Training: up to 15 references → one target (16 total) | ✓ |
+| Evaluation: first 20, 15 references → five targets, sampled five times | ✓ |
 | Dispersion conditioning via additive SiLU projection | ✓ |
 | Verbalization: kNN in CLHE space + Qwen3 LLM (no T5) | ✓ |
 | Synthesis: ACE-Step (frozen) | ✓ |

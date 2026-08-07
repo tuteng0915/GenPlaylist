@@ -15,18 +15,28 @@ Interface contract
 Schema constants (do NOT change without coordinating with 00_data_schema)
 -------------------------------------------------------------------------
   CUE_VOCAB_SIZE = 2048    (index 0 = '<unk>')
-  CUE_TOKENS     = 6       (c0 … c5, per song; experiments may override via num_cues)
+  CUE_CANDIDATES_PER_ITEM = 16  (ranked master table width)
+  CUE_TOKENS              = 8   (default prefix consumed by WP-C)
 """
 
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '00_data_schema'))
-from schema import CUE_VOCAB_SIZE  # noqa: E402
+from schema import (  # noqa: E402
+    CUE_CANDIDATES_PER_ITEM,
+    CUE_TOKENS,
+    CUE_VOCAB_SIZE,
+    SCHEMA_VERSION,
+    TOKEN_LAYOUT,
+)
+
+import cue_io  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +51,13 @@ def load_vocab(vocab_path: str) -> list[str]:
     """Load cue_vocab.json.  Validates that index 0 == '<unk>'."""
     with open(vocab_path, "r", encoding="utf-8") as f:
         vocab = json.load(f)
-    assert isinstance(vocab, list), "cue_vocab.json must be a JSON list."
-    assert len(vocab) == CUE_VOCAB_SIZE, \
-        f"Expected {CUE_VOCAB_SIZE} entries, got {len(vocab)}."
-    assert vocab[0] == UNK_CUE_STRING, \
-        f"vocab[0] must be '{UNK_CUE_STRING}', got '{vocab[0]}'."
+    if not isinstance(vocab, list):
+        raise ValueError("cue_vocab.json must be a JSON list")
+    if len(vocab) != CUE_VOCAB_SIZE:
+        raise ValueError(f"Expected {CUE_VOCAB_SIZE} entries, got {len(vocab)}")
+    if vocab[0] != UNK_CUE_STRING:
+        raise ValueError(
+            f"vocab[0] must be '{UNK_CUE_STRING}', got '{vocab[0]}'")
     return vocab
 
 
@@ -57,10 +69,14 @@ def export_outputs(
     vocab: list[str],
     item2cues: dict,
     output_dir: str,
+    *,
+    score_mapping: dict[str, list[float | None]] | None = None,
+    assignment_metadata: dict | None = None,
 ) -> None:
     """Write cue_vocab.json and item2cues.json to output_dir.
 
-    item2cues.json format: {"item_id": [c0, c1, c2, c3, c4, c5], ...}
+    item2cues.json format: {"item_id": [c0, c1, ..., c15], ...}. The
+    GenPlaylist-v1 model consumes the first eight entries.
     This is the format that CueMappingEntry.load_mapping() reads.
 
     Parameters
@@ -71,17 +87,89 @@ def export_outputs(
     output_dir : directory to write files.
     """
     os.makedirs(output_dir, exist_ok=True)
+    if not vocab or vocab[0] != UNK_CUE_STRING:
+        raise ValueError(
+            f"Cue vocab must reserve index 0 for {UNK_CUE_STRING!r}")
+
+    cue_counts = {len(entry.cue_ids) for entry in item2cues.values()}
+    if len(cue_counts) > 1:
+        raise ValueError(f"Inconsistent cue counts in item2cues: {sorted(cue_counts)}")
+    num_cues = cue_counts.pop() if cue_counts else CUE_TOKENS
+    for item_id, entry in item2cues.items():
+        if str(item_id) != str(entry.item_id):
+            raise ValueError(
+                f"Mapping key {item_id!r} disagrees with entry.item_id {entry.item_id!r}")
+        entry.validate(n_cues=num_cues, vocab_size=len(vocab))
 
     vocab_path = os.path.join(output_dir, "cue_vocab.json")
-    with open(vocab_path, "w", encoding="utf-8") as f:
-        json.dump(vocab, f, ensure_ascii=False, indent=2)
+    cue_io.atomic_write_json(vocab_path, vocab)
     print(f"[cue_export] Wrote vocab ({len(vocab)} entries) -> {vocab_path}")
 
     mapping = {iid: entry.cue_ids for iid, entry in item2cues.items()}
     cues_path = os.path.join(output_dir, "item2cues.json")
-    with open(cues_path, "w", encoding="utf-8") as f:
-        json.dump(mapping, f)
+    cue_io.atomic_write_json(cues_path, mapping)
     print(f"[cue_export] Wrote item2cues ({len(mapping)} items) -> {cues_path}")
+
+    score_path = None
+    if score_mapping is not None:
+        if set(score_mapping) != set(mapping):
+            raise ValueError("item2cue score IDs must exactly match item2cues IDs")
+        for item_id, scores in score_mapping.items():
+            if len(scores) != num_cues:
+                raise ValueError(
+                    f"Expected {num_cues} cue scores for {item_id}, got {len(scores)}")
+        score_path = os.path.join(output_dir, "item2cue_scores.json")
+        cue_io.atomic_write_json(score_path, score_mapping)
+
+        table_lines = ["item_id\trank\tcue_id\tcue\trelevance_score\tis_unk\n"]
+        for item_id, cue_ids in mapping.items():
+            for rank, (cue_id, score) in enumerate(
+                zip(cue_ids, score_mapping[item_id]), 1
+            ):
+                cue_text = vocab[cue_id].replace("\t", " ").replace("\n", " ")
+                score_text = "" if score is None else f"{score:.8f}"
+                table_lines.append(
+                    f"{item_id}\t{rank}\t{cue_id}\t{cue_text}\t{score_text}\t"
+                    f"{str(cue_id == UNK_CUE_ID).lower()}\n")
+        cue_io.atomic_write_text(
+            os.path.join(output_dir, "item_cues.tsv"), "".join(table_lines))
+
+    def sha256(path: str) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "wp_d_compatible": (
+            num_cues in {CUE_TOKENS, CUE_CANDIDATES_PER_ITEM}
+            and len(vocab) == CUE_VOCAB_SIZE),
+        "n_items": len(mapping),
+        "cue_vocab_size": len(vocab),
+        # Keep cues_per_item for older readers while making the new stored vs.
+        # active distinction explicit.
+        "cues_per_item": num_cues,
+        "stored_cues_per_item": num_cues,
+        "default_active_cues": CUE_TOKENS,
+        "artifact_contract_cues": CUE_CANDIDATES_PER_ITEM,
+        "cue_vocab_sha256": sha256(vocab_path),
+        "item2cues_sha256": sha256(cues_path),
+        "token_layout": {
+            "tokens_per_item": TOKEN_LAYOUT.tokens_per_item,
+            "bos": 0,
+            "boi": TOKEN_LAYOUT.boi_token,
+            "eos": TOKEN_LAYOUT.eos_token,
+            "cue_start": TOKEN_LAYOUT.cue_token_start,
+            "mask": TOKEN_LAYOUT.mask_token,
+        },
+    }
+    if score_path is not None:
+        manifest["item2cue_scores_sha256"] = sha256(score_path)
+    if assignment_metadata is not None:
+        manifest["assignment"] = assignment_metadata
+    cue_io.atomic_write_json(os.path.join(output_dir, "cue_manifest.json"), manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +179,7 @@ def export_outputs(
 def compute_coverage_stats(
     item2cues: dict,
     vocab: list[str],
+    cue_limit: int | None = None,
 ) -> dict:
     """Compute coverage and distribution statistics for the cue mapping.
 
@@ -116,9 +205,12 @@ def compute_coverage_stats(
     unk_slots = 0
     items_with_unk = 0
 
+    selected_rows = []
     for entry in item2cues.values():
+        cue_ids = entry.cue_ids[:cue_limit] if cue_limit is not None else entry.cue_ids
+        selected_rows.append(cue_ids)
         has_unk = False
-        for cid in entry.cue_ids:
+        for cid in cue_ids:
             cue_counts[cid] += 1
             if cid == UNK_CUE_ID:
                 unk_slots += 1
@@ -128,7 +220,7 @@ def compute_coverage_stats(
 
     # Sum actual per-entry lengths rather than assuming a fixed count: item2cues may
     # come from a --num-cues override, so slot count isn't always 6/item.
-    total_slots = sum(len(entry.cue_ids) for entry in item2cues.values())
+    total_slots = sum(len(row) for row in selected_rows)
     coverage_rate = 1.0 - items_with_unk / n_items
     unk_rate = unk_slots / total_slots
 
@@ -147,6 +239,8 @@ def compute_coverage_stats(
 
     return {
         "n_items": n_items,
+        "cue_limit": cue_limit,
+        "slots_per_item": sorted({len(row) for row in selected_rows}),
         "coverage_rate": round(coverage_rate, 4),
         "unk_rate": round(unk_rate, 4),
         "vocab_coverage": round(vocab_coverage, 4),
@@ -159,23 +253,55 @@ def compute_coverage_stats(
 # Report writer
 # ---------------------------------------------------------------------------
 
-def write_report(stats: dict, output_dir: str) -> None:
+def write_report(
+    stats: dict,
+    output_dir: str,
+    *,
+    active_stats: dict | None = None,
+    stored_stats: dict | None = None,
+) -> None:
     """Write cue_report.md from coverage stats."""
     os.makedirs(output_dir, exist_ok=True)
     report_path = os.path.join(output_dir, "cue_report.md")
-    lines = [
-        "# Cue Mining Report\n",
-        f"**Items processed:** {stats.get('n_items', 0)}\n",
-        f"**Coverage rate** (≥1 non-unk cue): {stats.get('coverage_rate', 0):.1%}\n",
-        f"**UNK slot rate:** {stats.get('unk_rate', 0):.1%}\n",
-        f"**Vocab utilization:** {stats.get('vocab_coverage', 0):.1%} of non-unk vocab entries used\n",
-        f"**Cue entropy:** {stats.get('cue_entropy_bits', 0):.2f} bits\n",
-        "\n## Top-10 most assigned cues\n",
-        "| Rank | Cue | Count |\n",
-        "|------|-----|-------|\n",
-    ]
-    for rank, (cue, cnt) in enumerate(stats.get("top10_cues", []), 1):
-        lines.append(f"| {rank} | {cue} | {cnt} |\n")
+    lines = ["# Cue Mining Report\n"]
+    if active_stats is not None and stored_stats is not None:
+        lines.extend([
+            f"**Items processed:** {stored_stats.get('n_items', 0)}\n",
+            "\n## Active vs. stored cue health\n",
+            "| Scope | Slots/item | Fully assigned | UNK slot rate | Vocab utilization | Entropy | Intra-cos ↓ |\n",
+            "|---|---:|---:|---:|---:|---:|---:|\n",
+        ])
+        for label, values in (("Active@8", active_stats), ("Stored@16", stored_stats)):
+            slot_widths = values.get("slots_per_item", [])
+            slots = slot_widths[0] if len(slot_widths) == 1 else str(slot_widths)
+            intra = values.get("intra_cos_mean")
+            intra_text = "n/a" if intra is None else f"{intra:.4f}"
+            lines.append(
+                f"| {label} | {slots} | {values.get('coverage_rate', 0):.1%} | "
+                f"{values.get('unk_rate', 0):.1%} | "
+                f"{values.get('vocab_coverage', 0):.1%} | "
+                f"{values.get('cue_entropy_bits', 0):.2f} | {intra_text} |\n")
+        for label, values in (("Active@8", active_stats), ("Stored@16", stored_stats)):
+            lines.extend([
+                f"\n## Top-10 most assigned cues — {label}\n",
+                "| Rank | Cue | Count |\n",
+                "|------|-----|-------|\n",
+            ])
+            for rank, (cue, cnt) in enumerate(values.get("top10_cues", []), 1):
+                lines.append(f"| {rank} | {cue} | {cnt} |\n")
+    else:
+        lines.extend([
+            f"**Items processed:** {stats.get('n_items', 0)}\n",
+            f"**Coverage rate** (all slots non-UNK): {stats.get('coverage_rate', 0):.1%}\n",
+            f"**UNK slot rate:** {stats.get('unk_rate', 0):.1%}\n",
+            f"**Vocab utilization:** {stats.get('vocab_coverage', 0):.1%} of non-unk vocab entries used\n",
+            f"**Cue entropy:** {stats.get('cue_entropy_bits', 0):.2f} bits\n",
+            "\n## Top-10 most assigned cues\n",
+            "| Rank | Cue | Count |\n",
+            "|------|-----|-------|\n",
+        ])
+        for rank, (cue, cnt) in enumerate(stats.get("top10_cues", []), 1):
+            lines.append(f"| {rank} | {cue} | {cnt} |\n")
     with open(report_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
     print(f"[cue_export] Wrote report -> {report_path}")
