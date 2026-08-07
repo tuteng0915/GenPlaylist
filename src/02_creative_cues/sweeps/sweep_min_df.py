@@ -7,9 +7,15 @@ write_report), so the Level 2 retrieval, Level 3 reconstruction, and LLM judge
 numbers are produced by the exact same code path as your run_compare.py reports
 — this script only adds a loop over `min_df` instead of over `methods`.
 
+min_df values are given as FRACTIONS of `--limit` (not raw counts), e.g. `0.001`
+means `min_df = round(0.001 * limit)`. This keeps the grid meaningful if you change
+`--limit` without having to hand-recompute absolute counts. Resolved min_df is
+never allowed below 2, regardless of how small a fraction produces. The report
+labels each arm by the fraction you passed in (not a converted percentage).
+
 Usage:
   .venv/Scripts/python.exe src/02_creative_cues/sweeps/sweep_min_df.py \
-      --methods tfidf --limit 5000 --min-dfs 2,5,10,25 \
+      --methods tfidf --limit 5000 --min-df-fracs 0.0004,0.001,0.002,0.005 \
       --top-n 100 --rank-by idf --lyrics-mode dedup --lyrics-cap 2000 \
       --num-cues 18 --vocab-size 2048 --held-out-eval --test-frac 0.15 --split-seed 42
 """
@@ -42,7 +48,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=5000, help="fixed corpus size (same for every arm)")
     ap.add_argument("--methods", default="tfidf", help="comma-separated extraction methods")
-    ap.add_argument("--min-dfs", default="2,5,10,25", help="comma-separated min_df values to sweep")
+    ap.add_argument("--min-df-fracs", default="0.0004,0.001,0.002,0.005",
+                    help="comma-separated min_df values as FRACTIONS of --limit "
+                         "(e.g. 0.001 -> min_df = round(0.001 * limit)); resolved min_df is "
+                         "floored at 2 regardless of how small a fraction requests")
     ap.add_argument("--top-n", type=int, default=100)
     ap.add_argument("--dedup-threshold", type=float, default=0.92)
     ap.add_argument("--rank-by", default="idf", choices=list(cue_normalize.RANK_METHODS))
@@ -65,15 +74,18 @@ def main():
     args = ap.parse_args()
 
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-    min_dfs = [int(x) for x in args.min_dfs.split(",") if x.strip()]
+    min_df_fracs = [float(x) for x in args.min_df_fracs.split(",") if x.strip()]
+    # resolved against the FIXED --limit corpus size; never below 2 regardless of frac*limit.
+    resolved_min_dfs = [(frac, max(2, round(frac * args.limit))) for frac in min_df_fracs]
 
     run_id = "sweep_min_df_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
     sweep_dir = os.path.join(run_compare.OUT_ROOT, "runs", run_id)
     os.makedirs(sweep_dir, exist_ok=True)
     cue_io.atomic_write_json(os.path.join(sweep_dir, "run_config.json"),
-                             {"run_id": run_id, **vars(args)})
+                             {"run_id": run_id, "resolved_min_dfs": resolved_min_dfs, **vars(args)})
     print(f"[sweep] run folder: {sweep_dir}")
-    print(f"[sweep] methods={methods} limit={args.limit} min_dfs={min_dfs}")
+    print(f"[sweep] methods={methods} limit={args.limit} "
+          f"min_df_fracs->resolved={[(f, md) for f, md in resolved_min_dfs]}")
 
     cue_eval.set_max_target_lines(0 if args.lyrics_mode == "full" else cue_eval.DEFAULT_MAX_TARGET_LINES)
     cue_eval.set_score_chars(args.score_chars)
@@ -112,9 +124,11 @@ def main():
 
     rows, vocabs, mappings = {}, {}, {}
     for method in methods:
-        for md in min_dfs:
-            label = f"{method}(min_df={md})" if len(methods) > 1 else f"min_df={md}"
-            run_compare.RUN_DIR = os.path.join(sweep_dir, "arms", label.replace("=", "").replace("(", "_").replace(")", ""))
+        for frac, md in resolved_min_dfs:
+            label = (f"{method}(min_df={md}, frac={frac})" if len(methods) > 1
+                    else f"min_df={md} (frac={frac})")
+            arm_dirname = f"{method}_md{md}_frac{frac}".replace(".", "_")
+            run_compare.RUN_DIR = os.path.join(sweep_dir, "arms", arm_dirname)
             print(f"\n########## {label} ##########")
             vocab, item2cues, nstats, cue_emb = run_compare.run_method(
                 method, items, lyrics_proc, md, args.force, block_tokens, args.top_n, cache_tag,
