@@ -77,7 +77,7 @@ def main() -> int:
     first = read_split(data / "splits" / "train.txt")[0]
     train_window = first[:FROZEN_NEXT_SONG_PROTOCOL.train_total_items]
     smoke = tokenizer.encode_playlist(
-        train_window, context_items=len(train_window) - 1)
+        train_window, context_items=FROZEN_NEXT_SONG_PROTOCOL.train_reference_items)
     report["smoke_sequence_length"] = int(len(smoke.input_ids))
     report["smoke_target_tokens"] = int(smoke.target_mask.sum())
     print(json.dumps(report, indent=2))

@@ -123,16 +123,15 @@ This allows a single model to produce tight continuations (low σ²_C) or divers
 ### 3.3 Training
 
 - Reference tokens are **never masked** (fixed context), identical to DDBC.
-- Every chronological prefix becomes a next-one example with at most 15 recent
-  references and exactly one target (16 songs total).
-- Training samples require at least two references plus one target.
+- Every eligible chronological segment becomes a 20-song rolling window with
+  exactly 15 references and five continuation targets.
+- Training samples require all 20 songs; stride is one song.
 - σ²_C and μ_C are computed from the reference items in each training batch.
 - Passed through `_forward_pass_diffusion` → `forward` → DIT.
 
-Inference uses the same full sequence layout as training. It appends one target
-slot whose twelve payload positions are all MASK, then jointly reverse-denoises
-that completion mask. The legacy DDBC next-block/semi-AR loop is not used by
-the production next-song path.
+Inference uses the same full sequence layout as training. It appends five target
+slots whose 60 payload positions are all MASK, then jointly reverse-denoises
+the complete continuation. The legacy DDBC next-block/semi-AR loop is not used.
 
 ---
 
@@ -251,8 +250,8 @@ WP-C evaluation is frozen independently of the WP-D audio demo:
 1. Keep test playlists with at least 20 songs and retain the first 20.
 2. Use songs 1–15 as the unchanged reference context and songs 16–20 as the
    five ground-truth future songs.
-3. Independently full-mask-sample one next item five times; never feed a sample
-   back into the context.
+3. Jointly full-mask-sample five continuation items once; never sequentially
+   feed a generated item back into the context.
 4. Retrieve predictions against the full 5,119-song catalog and solve the 5x5
    prediction/target cosine matrix with Hungarian assignment.
 
@@ -303,8 +302,8 @@ WP-D synthesis/audio evaluation remains a separate later stage:
 | Vocab size: 2894 (incl. MASK token) | ✓ |
 | Creative cues vocab size: 2048 | ✓ |
 | Stored cue candidates per item: 16, active prefix: 8 | ✓ |
-| Training: up to 15 references → one target (16 total) | ✓ |
-| Evaluation: first 20, 15 references → five targets, sampled five times | ✓ |
+| Training: rolling 15 references → five targets (20 total) | ✓ |
+| Evaluation: first 20, one joint five-item completion | ✓ |
 | Dispersion conditioning via additive SiLU projection | ✓ |
 | Verbalization: kNN in CLHE space + Qwen3 LLM (no T5) | ✓ |
 | Synthesis: ACE-Step (frozen) | ✓ |

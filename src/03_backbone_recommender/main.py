@@ -254,49 +254,49 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       if sigma_c2 is not None:
         sigma_c2 = sigma_c2.to(next(model.parameters()).device).float()
 
-      # Each draw is still next-one full-MASK completion, but evaluation uses
-      # five independent draws against the five songs following the same
-      # 15-song context.
+      # Evaluation performs one joint full-MASK completion of the five songs
+      # following the fixed 15-song context.
       eval_num_samples = int(config.protocol.eval_num_samples)
       eval_target_items = int(config.protocol.eval_target_items)
+      eval_generated_items = int(config.protocol.eval_generated_items)
       if labels.ndim != 3 or labels.shape[1] != eval_target_items:
         raise ValueError(
             f"rec_eval expects {eval_target_items} future-item labels, "
             f"got {tuple(labels.shape)}")
-      num_items = 1
+      if eval_num_samples != 1 or eval_generated_items != eval_target_items:
+        raise ValueError(
+            "Joint 15->5 evaluation requires one sample containing five items")
+      num_items = eval_generated_items
       tokens_per_item = tokenizer.tokens_per_item
-      stride_length = 2 + tokens_per_item
+      stride_length = 2 + num_items * tokens_per_item
 
       # DEBUG: 只在第一个batch打印配置信息
       if len(all_results) == 0:
         print(f"\n[Rec Eval Config]")
-        print("  Prediction mode: 15 references -> 5 independent next-one samples")
+        print("  Prediction mode: 15 references -> one joint 5-item completion")
         print(f"  labels.shape: {labels.shape}")
         print(f"  labels[0, :]: {labels[0, :].tolist()}")
         print(f"  input_ids.shape: {input_ids.shape}")
         print(f"  input_ids[0, :]: {input_ids[0, :].tolist()}")
         print(f"  items per draw: {num_items}")
-        print(f"  independent draws: {eval_num_samples}")
+        print(f"  joint draws: {eval_num_samples}")
         print(f"  tokens_per_item: {tokens_per_item} (BOI + {tokenizer.n_digit} RVQ digits + 1 conflict)")
         print(f"  calculated stride_length: {stride_length}")
 
-      # Draw five alternatives independently from the same context.  Samples
-      # are never fed back as context, so this remains next-one inference.
+      # One sample contains all five jointly denoised continuation items.
       text_samples = torch.zeros(
           (input_ids.shape[0], eval_num_samples, stride_length), dtype=torch.long)
 
-      # Each draw starts from a full-MASK payload; no next block is appended.
-      for i in range(eval_num_samples):
-        generated_next_items = model.restore_model_and_sample_next_item(
-            input_ids=input_ids,
-            num_steps=config.sampling.steps,
-            context_emb=context_emb,  # CFG context embedding (None if cfg_enabled=False)
-            mu_c=mu_c,
-            sigma_c2=sigma_c2,
-            sequence_mask=batch.get('sequence_mask'),
-        )
-
-        text_samples[:, i, :] = generated_next_items.detach().cpu()
+      generated_items = model.restore_model_and_sample_items(
+          input_ids=input_ids,
+          num_items=num_items,
+          num_steps=config.sampling.steps,
+          context_emb=context_emb,  # CFG context embedding (None if cfg_enabled=False)
+          mu_c=mu_c,
+          sigma_c2=sigma_c2,
+          sequence_mask=batch.get('sequence_mask'),
+      )
+      text_samples[:, 0, :] = generated_items.detach().cpu()
 
       # 计算该批次的推荐指标
       result = evaluator.calculate_metrics(text_samples, labels)
@@ -354,7 +354,7 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       Path(prepared_path_value).expanduser().resolve() / 'prepared_manifest.json'
       if prepared_path_value else None)
   payload = {
-      'result_schema': 'genplaylist-wp-c-rec-eval-v1',
+      'result_schema': 'genplaylist-wp-c-joint-15to5-eval-v2',
       'created_utc': datetime.now(timezone.utc).isoformat(),
       'git_commit': config.eval.get('git_commit', None),
       'checkpoint': {
@@ -379,6 +379,7 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
           'ema_enabled': not bool(config.eval.disable_ema),
           'sampler': str(config.sampling.predictor),
           'full_catalog_retrieval': True,
+          'generation': 'one_joint_full_mask_five_item_completion',
           'matching': 'hungarian_clhe_5x5',
           'official_protocol': not allow_protocol_override,
       },

@@ -93,7 +93,7 @@ class AbstractDataset:
 
     def _records_for_split(self, split: str) -> list[tuple[str, list[str]]]:
         if split not in {"train", "test"}:
-            raise ValueError(f"Unknown split {split!r}; GenPlaylist-v2 exposes train/test only")
+            raise ValueError(f"Unknown split {split!r}; GenPlaylist-v3 exposes train/test only")
         source_names = ("val", "test") if split == "test" else (split,)
         records = [
             record
@@ -119,11 +119,11 @@ class AbstractDataset:
         seq_len: int,
         if_train: bool = False,
     ) -> dict[str, list]:
-        """Build the frozen next-song train/unified-test examples.
+        """Build frozen joint 15-reference/5-target train and test examples.
 
-        Training expands every playlist into chronological prefix-to-next
-        examples.  Each example contains at most ``seq_len`` total items, so
-        ``seq_len=16`` means up to 15 references followed by one target.
+        Training expands every eligible playlist into all chronological
+        20-item rolling windows (stride one).  Every window contains exactly
+        15 references followed by the next five targets.
 
         Test rows combine the original val/test sources and follow the fixed
         15->5 protocol: playlists shorter than 20 items are excluded and the
@@ -134,20 +134,24 @@ class AbstractDataset:
         records = self._records_for_split(file_name)
         output: list[tuple[str, list[str]]] = []
         protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
-        min_references = protocol.min_reference_items
-        if seq_len < min_references + 1:
+        reference_items = protocol.train_reference_items
+        target_items = protocol.train_target_items
+        if seq_len != protocol.train_total_items:
             raise ValueError(
-                f"seq_len={seq_len} cannot hold {min_references} references and one target")
+                f"seq_len={seq_len} must equal frozen train_total_items="
+                f"{protocol.train_total_items}")
         if if_train and swap_ratio:
             raise ValueError(
-                "swap_ratio must be 0 for chronological next-song training")
+                "swap_ratio must be 0 for chronological continuation training")
 
         for playlist_id, item_ids in records:
             if if_train:
-                for target_index in range(min_references, len(item_ids)):
-                    context_start = max(0, target_index - (seq_len - 1))
-                    example = item_ids[context_start:target_index + 1]
-                    output.append((f"{playlist_id}:next:{target_index}", example))
+                for window_start in range(0, len(item_ids) - seq_len + 1):
+                    example = item_ids[window_start:window_start + seq_len]
+                    if len(example[:reference_items]) != reference_items or len(
+                            example[reference_items:]) != target_items:
+                        raise AssertionError("Malformed joint 15->5 training window")
+                    output.append((f"{playlist_id}:joint5:{window_start}", example))
             elif file_name == "test":
                 if len(item_ids) >= protocol.eval_total_items:
                     references, targets = protocol.split_evaluation_items(item_ids)

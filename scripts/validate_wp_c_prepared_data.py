@@ -104,13 +104,15 @@ def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
                 else:
                     _assert_array_equal(right, left, f"tokenized {split}[{source_index}].{field}")
 
-    train_examples = [tokenized["train"][index] for index in (0, 70000, 140432)]
+    train_count = EXPECTED_SPLIT_COUNTS["train"]
+    train_examples = [
+        tokenized["train"][index] for index in (0, train_count // 2, train_count - 1)]
     train_batch = tokenizer.collate_batch(train_examples)
     if train_batch["input_ids"].shape[1] > FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
             tokenizer.tokens_per_item):
-        raise ValueError("Collated train sequence exceeds frozen 210-token maximum")
-    if not np.all(train_batch["target_mask"].numpy().sum(axis=1) == 12):
-        raise ValueError("Each train row must expose exactly 12 target payload tokens")
+        raise ValueError("Collated train sequence exceeds frozen 262-token maximum")
+    if not np.all(train_batch["target_mask"].numpy().sum(axis=1) == 60):
+        raise ValueError("Each train row must expose exactly 60 target payload tokens")
 
     test_batch = tokenizer.collate_batch([tokenized["test"][0], tokenized["test"][-1]])
     if tuple(test_batch["input_ids"].shape) != (2, 197):
@@ -237,16 +239,19 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
     completion_mask = _load_vector(vector_dir, manifest, "eval_completion_mask.npy")
     expected_test = EXPECTED_SPLIT_COUNTS["test"]
     if context_ids.shape != (expected_test, 197) or completion_ids.shape != (
-            expected_test, 210):
+            expected_test, 262):
         raise ValueError("Evaluation context/completion token shapes drifted")
-    if not np.all(completion_mask.sum(axis=1) == 12):
-        raise ValueError("Each evaluation completion must mask exactly 12 payload tokens")
+    if not np.all(completion_mask.sum(axis=1) == 60):
+        raise ValueError("Each evaluation completion must mask exactly 60 payload tokens")
     if not np.all(completion_ids[completion_mask] == TOKEN_LAYOUT.mask_token):
         raise ValueError("Evaluation completion payload contains a non-MASK token")
     _assert_array_equal(completion_ids[:, :196], context_ids[:, :196],
                         "evaluation completion reference prefix")
-    if not np.all(completion_ids[:, 196] == TOKEN_LAYOUT.boi_token):
-        raise ValueError("Evaluation completion does not place BOI after 15 references")
+    for item_index in range(5):
+        boi_position = 196 + item_index * TOKEN_LAYOUT.tokens_per_item
+        if not np.all(completion_ids[:, boi_position] == TOKEN_LAYOUT.boi_token):
+            raise ValueError(
+                f"Evaluation completion target {item_index} is missing BOI")
     if not np.all(completion_ids[:, -1] == TOKEN_LAYOUT.eos_token):
         raise ValueError("Evaluation completion does not end in EOS")
 

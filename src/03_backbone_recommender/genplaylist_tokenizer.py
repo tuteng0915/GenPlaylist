@@ -236,10 +236,10 @@ class GenPlaylistTokenizer:
         ids = [str(item_id) for item_id in item_ids]
         if len(ids) < 3:
             raise ValueError(
-                "Next-song training needs at least two reference items and one target item")
+                "Playlist completion needs at least two references and one target")
         if not 2 <= context_items < len(ids):
             raise ValueError(
-                "context_items must contain at least two references and leave a target item")
+                "context_items must contain at least two references and leave targets")
         if len(set(ids)) != len(ids):
             raise ValueError("Playlist item IDs must be unique")
 
@@ -269,10 +269,12 @@ class GenPlaylistTokenizer:
             sigma_c2=sigma_c2,
         )
 
-    def build_next_item_completion(
-        self, context_tokens: list[int] | np.ndarray,
+    def build_item_completion(
+        self, context_tokens: list[int] | np.ndarray, *, num_items: int,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Build ``references + [BOI, MASK x 12, EOS]`` for full-mask inference."""
+        """Append ``num_items`` joint full-MASK item slots to references."""
+        if num_items <= 0:
+            raise ValueError(f"num_items must be positive, got {num_items}")
         values = np.asarray(context_tokens, dtype=np.int64)
         if values.ndim != 1:
             raise ValueError(f"context_tokens must be 1-D, got {values.shape}")
@@ -288,17 +290,34 @@ class GenPlaylistTokenizer:
         if reference_width // self.tokens_per_item < 2:
             raise ValueError("Next-song completion requires at least two reference items")
 
+        reference_items = reference_width // self.tokens_per_item
+        if reference_items + num_items > self.max_items:
+            raise ValueError(
+                f"{reference_items} references + {num_items} targets exceed "
+                f"max_items={self.max_items}")
+
         payload_width = self.tokens_per_item - 1
-        completed = np.asarray([
-            *values[:-1],
-            self.boi_token,
-            *([self.mask_token_id] * payload_width),
-            self.eos_token,
-        ], dtype=np.int64)
+        target_tokens = []
+        for _ in range(num_items):
+            target_tokens.extend([
+                self.boi_token,
+                *([self.mask_token_id] * payload_width),
+            ])
+        completed = np.asarray(
+            [*values[:-1], *target_tokens, self.eos_token], dtype=np.int64)
         completion_mask = np.zeros(len(completed), dtype=bool)
-        payload_start = len(values)
-        completion_mask[payload_start:payload_start + payload_width] = True
+        first_target_boi = len(values) - 1
+        for target_index in range(num_items):
+            payload_start = (
+                first_target_boi + target_index * self.tokens_per_item + 1)
+            completion_mask[payload_start:payload_start + payload_width] = True
         return completed, completion_mask
+
+    def build_next_item_completion(
+        self, context_tokens: list[int] | np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Backward-compatible one-item completion used by the WP-D demo."""
+        return self.build_item_completion(context_tokens, num_items=1)
 
     def make_type_mask(self, seq_len: int) -> np.ndarray:
         """Return ``[seq_len, runtime_vocab]`` legal-token positions.
@@ -410,15 +429,16 @@ class GenPlaylistTokenizer:
         return 1 + self.max_items * self.tokens_per_item + 1
 
     def tokenize(self, datasets: dict) -> dict:
-        """Tokenize next-one training rows and fixed 15->5 evaluation rows."""
+        """Tokenize fixed joint 15-reference/5-target train and test rows."""
         tokenized = {}
         for split, source in datasets.items():
-            usable = source.filter(lambda row: len(row["item_seq"]) >= 3)
+            protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
+            usable = source.filter(
+                lambda row: len(row["item_seq"]) == protocol.train_total_items)
 
             def encode_row(row):
                 item_ids = [str(item_id) for item_id in row["item_seq"]]
                 if split == "test":
-                    protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
                     reference_count = protocol.eval_reference_items
                     target_count = protocol.eval_target_items
                     expected_count = protocol.eval_total_items
@@ -428,15 +448,19 @@ class GenPlaylistTokenizer:
                             f"{reference_count}->{target_count} evaluation, got {len(item_ids)}")
                     reference_ids = item_ids[:reference_count]
                     target_ids = item_ids[reference_count:]
-                    # Reuse encode_playlist to compute the context statistics;
-                    # the temporary target is not exposed in test input_ids.
                     encoded = self.encode_playlist(
-                        [*reference_ids, target_ids[0]], context_items=reference_count)
+                        [*reference_ids, *target_ids], context_items=reference_count)
                 else:
-                    reference_ids = item_ids[:-1]
-                    target_ids = item_ids[-1:]
+                    reference_count = protocol.train_reference_items
+                    target_count = protocol.train_target_items
+                    if len(item_ids) != protocol.train_total_items:
+                        raise ValueError(
+                            f"Train rows must contain exactly {protocol.train_total_items} "
+                            f"items for {reference_count}->{target_count}, got {len(item_ids)}")
+                    reference_ids = item_ids[:reference_count]
+                    target_ids = item_ids[reference_count:]
                     encoded = self.encode_playlist(
-                        item_ids, context_items=len(reference_ids))
+                        item_ids, context_items=reference_count)
                 result = {
                     "input_ids": encoded.input_ids.tolist(),
                     "sequence_mask": [True] * len(encoded.input_ids),

@@ -59,12 +59,18 @@ def make_twenty_item_tokenizer():
         semantic, cues, items, embeddings,
         {item_id: index for index, item_id in enumerate(item_ids)}, weights)
     tokenizer.config = {
+        "seq_len": 20,
         "rq_codebook_size": 256,
         "protocol": {
+            "min_reference_items": 15,
+            "train_target_items": 5,
             "eval_reference_items": 15,
             "eval_target_items": 5,
+            "eval_num_samples": 1,
+            "eval_generated_items": 5,
         },
     }
+    tokenizer.max_items = 20
     return tokenizer, item_ids
 
 
@@ -181,6 +187,25 @@ def test_builds_explicit_full_mask_next_item_slot():
     assert completed[-1] == tokenizer.eos_token
 
 
+def test_builds_joint_five_item_full_mask_completion():
+    tokenizer, item_ids = make_twenty_item_tokenizer()
+    context = [tokenizer.bos_token]
+    for item_id in item_ids[:15]:
+        context.extend(tokenizer.encode_item(item_id))
+    context.append(tokenizer.eos_token)
+    completed, completion_mask = tokenizer.build_item_completion(
+        context, num_items=5)
+
+    assert len(completed) == 2 + 20 * tokenizer.tokens_per_item
+    assert completion_mask.sum() == 5 * (tokenizer.tokens_per_item - 1)
+    assert np.all(completed[completion_mask] == tokenizer.mask_token_id)
+    target_start = 1 + 15 * tokenizer.tokens_per_item
+    for item_index in range(5):
+        assert completed[target_start + item_index * tokenizer.tokens_per_item] == (
+            tokenizer.boi_token)
+    assert completed[-1] == tokenizer.eos_token
+
+
 def test_full_mask_completion_handles_reference_lengths_and_rejects_one_reference():
     tokenizer = make_tokenizer()
 
@@ -217,6 +242,18 @@ def test_test_tokenization_exposes_fifteen_references_and_five_labels():
     assert row["labels"][0] == tokenizer.semantic_tokens[item_ids[15]]
     assert row["labels"][-1] == tokenizer.semantic_tokens[item_ids[19]]
     assert np.allclose(row["mu_c"], 7.0)
+
+
+def test_train_tokenization_scores_all_five_target_payloads():
+    tokenizer, item_ids = make_twenty_item_tokenizer()
+    source = FakeRows([{"bundle": "p", "item_seq": item_ids}])
+    row = tokenizer.tokenize({"train": source})["train"][0]
+
+    assert len(row["input_ids"]) == 2 + 20 * tokenizer.tokens_per_item
+    assert sum(row["target_mask"]) == 5 * (tokenizer.tokens_per_item - 1)
+    first_target = 1 + 15 * tokenizer.tokens_per_item
+    assert not row["target_mask"][first_target]
+    assert all(row["target_mask"][first_target + 1:first_target + 13])
 
 
 if __name__ == "__main__":

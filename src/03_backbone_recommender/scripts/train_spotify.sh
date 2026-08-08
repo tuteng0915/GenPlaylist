@@ -11,13 +11,27 @@ TRAIN_MODE="${GENPLAYLIST_TRAIN_MODE:-warmstart}"
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
 WARMSTART_CKPT="${GENPLAYLIST_WARMSTART_CKPT:-$REPO_ROOT/checkpoints/pretrained/ddbc/spotify30.ckpt}"
-DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v2-16item-unified-test-15to5"
+DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v3-20item-joint-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
 MODEL_SIZE="${GENPLAYLIST_MODEL_SIZE:-small}"
 GLOBAL_BATCH_SIZE="${GENPLAYLIST_GLOBAL_BATCH_SIZE:-512}"
 TRAIN_BATCH_SIZE="${GENPLAYLIST_TRAIN_BATCH_SIZE:-300}"
 MAX_STEPS="${GENPLAYLIST_MAX_STEPS:-20000}"
 LIMIT_TRAIN_BATCHES="${GENPLAYLIST_LIMIT_TRAIN_BATCHES:-1.0}"
+LOSS_CURRICULUM="${GENPLAYLIST_LAYER_LOSS_CURRICULUM:-false}"
+
+case "$LOSS_CURRICULUM" in
+  true)
+    LOSS_VARIANT="rvq-cue-warmup"
+    ;;
+  false)
+    LOSS_VARIANT="uniform"
+    ;;
+  *)
+    echo "GENPLAYLIST_LAYER_LOSS_CURRICULUM must be true or false" >&2
+    exit 2
+    ;;
+esac
 
 if [[ ! -f "$PREPARED_DATA_ROOT/prepared_manifest.json" ]]; then
   echo "Missing prepared WP-C data: $PREPARED_DATA_ROOT/prepared_manifest.json" >&2
@@ -55,7 +69,7 @@ case "$TRAIN_MODE" in
 esac
 
 # Generate unique run name with timestamp to avoid conflicts
-RUN_NAME="genplaylist-v2-spotify16-$(date +%Y%m%d-%H%M%S)"
+RUN_NAME="genplaylist-v3-spotify-joint15to5-${LOSS_VARIANT}-$(date +%Y%m%d-%H%M%S)"
 
 cd "$WP_ROOT"
 python main.py \
@@ -76,6 +90,7 @@ python main.py \
   +run_name=${RUN_NAME} \
   trainer.max_steps="$MAX_STEPS" \
   trainer.limit_train_batches="$LIMIT_TRAIN_BATCHES" \
+  training.layer_loss_weights.enabled="$LOSS_CURRICULUM" \
   parameterization=subs \
   eval.compute_generative_perplexity=False \
   sampling.steps=25 \

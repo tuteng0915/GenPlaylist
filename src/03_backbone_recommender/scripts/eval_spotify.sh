@@ -10,7 +10,7 @@ export PYTHONPATH="$WP_ROOT:${PYTHONPATH:-}"
 
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
-DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v2-16item-unified-test-15to5"
+DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v3-20item-joint-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
 EVAL_CKPT="${GENPLAYLIST_EVAL_CKPT:-}"
 MODEL_SIZE="${GENPLAYLIST_MODEL_SIZE:-small}"
@@ -76,6 +76,6 @@ python main.py \
   sampling.steps="$SAMPLING_STEPS" \
   parameterization=subs \
   eval.compute_generative_perplexity=false \
-  +run_name="genplaylist-v2-official-eval-${STAMP}"
+  +run_name="genplaylist-v3-joint15to5-official-eval-${STAMP}"
 
 echo "Official WP-C result: $RESULTS_PATH"

@@ -1,4 +1,4 @@
-"""Load and validate an offline-prepared GenPlaylist-v1 DatasetDict."""
+"""Load and validate the offline-prepared GenPlaylist-v3 DatasetDict."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 from shared.schema import SCHEMA_VERSION, TOKEN_LAYOUT
 
 
-PREPARED_DATA_VERSION = "genplaylist-v2-16item-unified-test-15to5"
-EXPECTED_SPLIT_COUNTS = {"train": 140433, "test": 941}
+PREPARED_DATA_VERSION = "genplaylist-v3-20item-joint-15to5"
+EXPECTED_SPLIT_COUNTS = {"train": 57331, "test": 941}
 PREPARATION_CODE_FILES = (
     "scripts/prepare_wp_c_data.py",
     "src/00_data_schema/schema.py",

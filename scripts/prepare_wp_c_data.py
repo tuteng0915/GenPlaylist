@@ -160,7 +160,8 @@ def _build_vectors(root: Path, dataset, tokenizer) -> dict:
         for item_id in references:
             context.extend(tokenizer.encode_item(item_id))
         context.append(tokenizer.eos_token)
-        completed, completion_mask = tokenizer.build_next_item_completion(context)
+        completed, completion_mask = tokenizer.build_item_completion(
+            context, num_items=FROZEN_NEXT_SONG_PROTOCOL.eval_generated_items)
         ref_emb = catalog[ref_rows]
         mu_c = ref_emb.mean(axis=0, dtype=np.float32)
 
@@ -285,10 +286,12 @@ def main() -> int:
             "protocol": {
                 "min_reference_items": FROZEN_NEXT_SONG_PROTOCOL.min_reference_items,
                 "train_total_items": FROZEN_NEXT_SONG_PROTOCOL.train_total_items,
+                "train_target_items": FROZEN_NEXT_SONG_PROTOCOL.train_target_items,
                 "eval_total_items": FROZEN_NEXT_SONG_PROTOCOL.eval_total_items,
                 "eval_reference_items": FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items,
                 "eval_target_items": FROZEN_NEXT_SONG_PROTOCOL.eval_target_items,
                 "eval_num_samples": FROZEN_NEXT_SONG_PROTOCOL.eval_num_samples,
+                "eval_generated_items": FROZEN_NEXT_SONG_PROTOCOL.eval_generated_items,
             },
             "token_layout": {
                 "tokens_per_item": tokenizer.tokens_per_item,

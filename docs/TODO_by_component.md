@@ -2,12 +2,10 @@
 
 ## Frozen task definition
 
-Input is an ordered set of at least two reference tracks. DDBC predicts exactly
-one next-item token group per sampling run. Training windows contain at most
-15 references plus one target. Evaluation fixes the first 20 test songs as
-15 references plus five ground-truth songs and independently samples the same
-next-one slot five times. WP-D turns one selected latent plan into one new song;
-the WP-D demo is not changed by the offline evaluation protocol.
+Input is an ordered set of 15 reference tracks. DDBC jointly predicts five
+continuation token groups in one full-MASK sampling run. Training and evaluation
+both use 15 references followed by five targets. WP-D remains unchanged and may
+consume one selected latent plan until its demo contract is revised separately.
 
 ## WP-A — Reference input construction
 
@@ -26,24 +24,27 @@ the WP-D demo is not changed by the offline evaluation protocol.
 - [x] Build and hash the final production cue artifacts on all 5,119 items.
 - [x] Verify full coverage and zero unknown padding on the frozen test windows.
 
-## WP-C — DDBC backbone and next-item prediction
+## WP-C — DDBC backbone and joint continuation prediction
 
 - [x] Freeze the 13-token item layout and legal position masks.
-- [x] Expand every chronological prefix into at most 15 references plus one target.
-- [x] Require at least two references plus one target in training data.
-- [x] Keep reference tokens fixed; corrupt and score only the next-item payload.
+- [x] Expand every eligible playlist into rolling 20-song windows with stride one.
+- [x] Require exactly 15 references plus five targets in training data.
+- [x] Keep reference tokens fixed; corrupt and score all five target payloads.
 - [x] Condition DDBC/DiT on reference centroid `mu_c` and dispersion `sigma_c2`.
-- [x] Add full-mask completion that appends `[BOI, MASK×12, EOS]` and emits one item.
+- [x] Add full-mask completion that appends five `[BOI, MASK×12]` blocks.
 - [x] Keep the legacy next-block/semi-AR sampler out of the production path.
 - [x] Freeze evaluation to first 20 songs: 15 references and five targets.
-- [x] Draw five independent next-one samples without feeding predictions back.
+- [x] Draw one joint five-item completion without sequential feedback.
 - [x] Score the 5x5 sets with full-catalog retrieval and Hungarian matching.
 - [x] Generate/convert the server-side CLHE, RVQ, semantic-token, and cue artifacts.
-- [x] Train the new 20,000-step checkpoint; old multi-item or old-vocabulary checkpoints are incompatible.
-- [ ] Run checkpoint preflight and one real next-item inference on the server.
-- [ ] Run the frozen 15->5 evaluation with the newly trained checkpoint.
+- [ ] Train the new joint-15to5 checkpoint; the earlier next-one SFT checkpoint is only a baseline.
+- [ ] Run checkpoint preflight and one real joint five-item inference on the server.
+- [ ] Run the frozen joint 15->5 evaluation with the newly trained checkpoint.
 - [x] Add a versioned official evaluator that freezes EMA, seed 1, 256 steps,
   full-catalog retrieval, and atomic result metadata.
+- [x] Add an opt-in, loss-scale-normalized RVQ/cue curriculum and effective-weight logs.
+- [x] Add order-free generated-cue multiset metrics for the five-item continuation.
+- [ ] Compare the uniform-loss baseline with the RVQ/cue curriculum under an otherwise identical schedule.
 
 ## WP-D — Verbalization, synthesis, and study UI
 
@@ -66,7 +67,7 @@ not authorize WP-D demo code or UI changes.
 - [x] Keep an explicit research API for alternative samples of the same next slot.
 - [x] Validate catalog alignment, sparse IDs, generated token types, and output schema.
 - [ ] Version all server artifact paths/hashes and the newly trained checkpoint.
-- [ ] Run WP-C latent evaluation as five samples against five future songs.
+- [ ] Run WP-C latent evaluation as one joint five-item completion against five future songs.
 - [ ] Compute corpus-level FAD/CLAP plus human next-song fit, quality, and novelty.
 - [ ] Run the full backbone -> verbalization -> ACE-Step path and inspect WAV output.
 
