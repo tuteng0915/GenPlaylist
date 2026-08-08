@@ -515,7 +515,21 @@ def _train(config, logger, tokenizer, tokenized_dataset, trainer=None):
   # 创建训练数据加载器
   # 将HuggingFace Dataset包装为torch Dataset，使Lightning可以正确应用DistributedSampler
   train_batch_size = config.get('loader', {}).get('batch_size', config.get('train_batch_size', 64))
+  world_size = int(config.trainer.devices) * int(config.trainer.num_nodes)
+  accumulation = int(config.trainer.accumulate_grad_batches)
+  configured_global_batch = int(config.loader.global_batch_size)
+  effective_global_batch = train_batch_size * world_size * accumulation
+  if effective_global_batch != configured_global_batch:
+    raise ValueError(
+      'Effective global batch size drifted: '
+      f'per_device={train_batch_size} * world_size={world_size} * '
+      f'accumulation={accumulation} = {effective_global_batch}, '
+      f'configured={configured_global_batch}. Choose a per-device batch size '
+      'that divides the configured global batch exactly.')
   logger.info(f'Creating train DataLoader: train_batch_size={train_batch_size}')
+  logger.info(
+    'Effective global batch size: %s x %s devices x %s accumulation = %s',
+    train_batch_size, world_size, accumulation, effective_global_batch)
   logger.info(f'Train dataset type: {type(tokenized_dataset["train"])}, length: {len(tokenized_dataset["train"])}')
 
   # 包装HuggingFace Dataset为torch Dataset

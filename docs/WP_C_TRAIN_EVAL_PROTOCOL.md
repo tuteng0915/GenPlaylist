@@ -59,6 +59,12 @@ Run the baseline with the default `train_spotify.sh`. Run the ablation with
 `rvq-cue-warmup` automatically. Both runs must warm-start the same official DDBC
 checkpoint and otherwise use identical seeds, data, and schedules.
 
+The default training batch is 256 items per visible GPU with global batch 512.
+On one GPU this uses two-step gradient accumulation; on two GPUs it uses one.
+Training fails fast if per-device batch × world size × accumulation does not
+equal the configured global batch, so an override cannot silently turn 512 into
+the historical effective batch of 600.
+
 ## Unified test evaluation
 
 - Concatenate the original `val.txt` and `test.txt` sources in that order and
