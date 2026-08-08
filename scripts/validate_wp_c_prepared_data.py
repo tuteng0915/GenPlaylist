@@ -80,7 +80,7 @@ def _validate_output_hashes(root: Path, manifest: dict) -> None:
 
 
 def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
-    from datasets import load_from_disk
+    from datasets import Dataset, load_from_disk
 
     raw = load_from_disk(str(root / "raw_dataset"))
     raw_counts = {split: len(raw[split]) for split in raw}
@@ -89,16 +89,25 @@ def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
 
     for split, count in EXPECTED_SPLIT_COUNTS.items():
         indices = sorted({0, count // 2, count - 1})
+        source_rows = []
         for index in indices:
-            if raw[split][index] != dataset.split_data[split][index]:
+            source_row = raw[split][index]
+            source_rows.append(source_row)
+            if source_row != dataset.split_data[split][index]:
                 raise ValueError(f"Raw {split}[{index}] differs from source expansion")
 
-        fresh = tokenizer.tokenize({split: raw[split].select(indices)})[split]
-        cached = tokenized[split].select(indices)
+        # Rebuild a tiny in-memory Dataset. Running filter/map directly on the
+        # disk-backed prepared Dataset would create cache-*.arrow files inside
+        # the immutable release directory and invalidate its output manifest.
+        sampled = Dataset.from_dict({
+            column: [row[column] for row in source_rows]
+            for column in raw[split].column_names
+        })
+        fresh = tokenizer.tokenize({split: sampled})[split]
         for sample_index, source_index in enumerate(indices):
             for field in fresh.column_names:
                 left = fresh[sample_index][field]
-                right = cached[sample_index][field]
+                right = tokenized[split][source_index][field]
                 if field in {"context_emb", "mu_c", "sigma_c2"}:
                     _assert_array_close(right, left, f"tokenized {split}[{source_index}].{field}")
                 else:
@@ -173,7 +182,9 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
         "normalized RVQ reconstructions")
     _assert_array_equal(
         _load_vector(vector_dir, manifest, "full_sequence_type_mask.npy"),
-        tokenizer.make_type_mask(210), "full legal-token type mask")
+        tokenizer.make_type_mask(FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+            tokenizer.tokens_per_item)),
+        "full legal-token type mask")
 
     bundle_ids = _load_vector(vector_dir, manifest, "eval_bundle_ids.npy")
     ref_ids = _load_vector(vector_dir, manifest, "eval_reference_item_ids.npy")
