@@ -93,7 +93,7 @@ class AbstractDataset:
 
     def _records_for_split(self, split: str) -> list[tuple[str, list[str]]]:
         if split not in {"train", "test"}:
-            raise ValueError(f"Unknown split {split!r}; GenPlaylist-v3 exposes train/test only")
+            raise ValueError(f"Unknown split {split!r}; GenPlaylist-v4 exposes train/test only")
         source_names = ("val", "test") if split == "test" else (split,)
         records = [
             record

@@ -247,8 +247,10 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
         context_emb = batch.get('context_emb', None)
         if context_emb is not None:
           context_emb = context_emb.to(next(model.parameters()).device).float()
-      mu_c = batch.get('mu_c', None)
-      sigma_c2 = batch.get('sigma_c2', None)
+      structure_conditioning = getattr(
+          config.sampling, 'structure_conditioning', False)
+      mu_c = batch.get('mu_c', None) if structure_conditioning else None
+      sigma_c2 = batch.get('sigma_c2', None) if structure_conditioning else None
       if mu_c is not None:
         mu_c = mu_c.to(next(model.parameters()).device).float()
       if sigma_c2 is not None:

@@ -19,6 +19,7 @@ sys.path.insert(0, str(_SRC))
 
 from shared.schema import (  # noqa: E402
     CLHE_EMB_DIM,
+    CUE_CANDIDATES_PER_ITEM,
     CUE_TOKENS,
     RQ_N_CODEBOOKS,
     CatalogItem,
@@ -40,7 +41,7 @@ class TokenizedPlaylist:
 
 
 class GenPlaylistTokenizer:
-    """Encode the 13-token item representation and decode one candidate."""
+    """Encode a configurable-cue item representation and decode candidates."""
 
     bos_token = 0
     boi_token = TOKEN_LAYOUT.boi_token
@@ -60,7 +61,15 @@ class GenPlaylistTokenizer:
         catalog_embeddings: np.ndarray,
         item_id_to_row: dict[str, int],
         codebook_weights: np.ndarray,
+        active_cues: int = CUE_TOKENS,
     ):
+        active_cues = int(active_cues)
+        if not 0 <= active_cues <= CUE_CANDIDATES_PER_ITEM:
+            raise ValueError(
+                f"active_cues must be in [0, {CUE_CANDIDATES_PER_ITEM}], "
+                f"got {active_cues}")
+        self.active_cues = active_cues
+        self.tokens_per_item = 1 + RQ_N_CODEBOOKS + 1 + active_cues
         self.semantic_tokens = {
             str(item_id): [int(token) for token in tokens]
             for item_id, tokens in semantic_tokens.items()
@@ -70,7 +79,7 @@ class GenPlaylistTokenizer:
             for item_id, cues in item2cues.items()
         }
         self.item2cues = {
-            item_id: cues[:CUE_TOKENS]
+            item_id: cues[:active_cues]
             for item_id, cues in self.stored_item2cues.items()
         }
         self.catalog_items = catalog_items
@@ -140,9 +149,9 @@ class GenPlaylistTokenizer:
             raise ValueError(
                 f"Cue schema {manifest.get('schema_version')!r} does not match "
                 f"{TOKEN_LAYOUT.schema_version!r}")
-        if active_cues != CUE_TOKENS:
+        if not 0 <= active_cues <= CUE_CANDIDATES_PER_ITEM:
             raise ValueError(
-                f"GenPlaylist-v1 token layout requires active_cues={CUE_TOKENS}, "
+                f"active_cues must be in [0, {CUE_CANDIDATES_PER_ITEM}], "
                 f"got {active_cues}")
         stored_cues = int(manifest.get(
             "stored_cues_per_item", manifest.get("cues_per_item", 0)))
@@ -150,11 +159,6 @@ class GenPlaylistTokenizer:
             raise ValueError(
                 f"Cue artifact stores {stored_cues} cues/item but WP-C needs the "
                 f"first {active_cues}")
-        manifest_active = int(manifest.get("default_active_cues", CUE_TOKENS))
-        if manifest_active != CUE_TOKENS:
-            raise ValueError(
-                f"Cue artifact default_active_cues={manifest_active} does not match "
-                f"the {CUE_TOKENS}-cue token layout")
         semantic_tokens = json.loads(Path(semantic_tokens_path).read_text(encoding="utf-8"))
         item2cues = json.loads(Path(item2cues_path).read_text(encoding="utf-8"))
         bad_lengths = {
@@ -170,7 +174,7 @@ class GenPlaylistTokenizer:
         weights = np.load(codebook_weights_path, allow_pickle=False)
         return cls(
             semantic_tokens, item2cues, catalog_items, catalog_embeddings,
-            item_id_to_row, weights)
+            item_id_to_row, weights, active_cues=active_cues)
 
     def _validate_artifacts(self) -> None:
         validate_catalog_alignment(
@@ -197,12 +201,12 @@ class GenPlaylistTokenizer:
         for item_id in catalog_ids:
             self._validated_semantic_tokens(item_id)
             stored_cues = self.stored_item2cues[item_id]
-            if len(stored_cues) < CUE_TOKENS:
+            if len(stored_cues) < self.active_cues:
                 raise ValueError(
                     f"Item {item_id} stores only {len(stored_cues)} cues; "
-                    f"at least {CUE_TOKENS} are required")
+                    f"at least {self.active_cues} are required")
             cues = self.item2cues[item_id]
-            if len(cues) != CUE_TOKENS or any(
+            if len(cues) != self.active_cues or any(
                 cue < 0 or cue >= TOKEN_LAYOUT.cue_vocab_size for cue in cues):
                 raise ValueError(f"Invalid cue IDs for item {item_id}: {cues}")
 
@@ -323,7 +327,7 @@ class GenPlaylistTokenizer:
         """Return ``[seq_len, runtime_vocab]`` legal-token positions.
 
         The final position is reserved for EOS; every complete item payload
-        between BOS/EOS follows the 13-token stride. MASK is never a
+        between BOS/EOS follows the configured item stride. MASK is never a
         legal clean prediction.
         """
         if seq_len < 2 or (seq_len - 2) % self.tokens_per_item != 0:

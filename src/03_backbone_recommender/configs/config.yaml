@@ -42,7 +42,7 @@ sampling:
   cfg_encoder: false  # true = 用 Transformer encoder 编码 context（false = mean-pool）
   cfg_p_drop: 0.1     # 训练时 context dropout 概率
   cfg_w: 2.0          # 推理 guidance scale（1.0=仅 conditioned，>1=放大）
-  structure_conditioning: true  # condition AdaLN on playlist centroid + dispersion
+  structure_conditioning: false  # retained only for legacy-checkpoint compatibility
 
 training:
   ema: 0.9999
@@ -58,12 +58,13 @@ training:
   # 开启 normalize 后，位置权重会归一化到 target token 平均权重为 1，
   # 因而 curriculum 不会改变总 loss 尺度或等效学习率。
   layer_loss_weights:
-    enabled: false
+    enabled: true
     normalize: true
     rvq_weights: [2.0, 1.5, 1.0]
     conflict_weight: 0.5
     cue_weight: 1.0
-    # Baseline 保持 enabled=false。消融实验开启总开关后，前 1000 steps
+    # Full GenPlaylist uses this curriculum. Set enabled=false for the uniform-loss ablation.
+    # 前 1000 steps
     # 固定使用 initial_*，随后在 1000--5000 steps 线性插值到上面的最终值。
     warmup:
       enabled: true
@@ -162,8 +163,8 @@ cue_vocab_path: null
 cue_manifest_path: null
 # Optional offline cache produced by scripts/prepare_wp_c_data.py.
 prepared_dataset_path: null
-# WP-B stores 16 ranked candidates per song; the v1 token layout consumes the
-# first 8. Changing this requires a new token layout and a separately trained model.
+# WP-B stores 16 ranked candidates per song. The main model consumes the first
+# 8; 0/4/16 are separate layouts and require separately prepared data and training.
 active_cue_tokens: 8
 feature_type: clhe
 sent_emb_pca: -1

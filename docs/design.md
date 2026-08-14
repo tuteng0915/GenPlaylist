@@ -89,45 +89,13 @@ Note: CLHE codes are 1-indexed; embedding reconstruction uses `weight[code - 1]`
 
 ---
 
-## 3. Dispersion Conditioning
+## 3. History Conditioning
 
-### 3.1 What is injected
-
-For each training prefix, two quantities characterize the reference set `C`:
-
-```
-μ_C  = (1/|C|) Σ E(m)          centroid vector ∈ R^(d_c + d_t)
-σ²_C = (1/|C|) Σ ||E(m) - μ_C||²   scalar dispersion
-```
-
-### 3.2 Injection mechanism
-
-Both are projected into the model's hidden space and injected as **additional conditioning signals** (not CFG prefix tokens). Concretely, in `models/dit.py`:
-
-```python
-# Existing sigma conditioning
-c = F.silu(self.sigma_map(sigma))          # [B, hidden]
-
-# New dispersion conditioning (added alongside sigma)
-disp_c = F.silu(self.disp_map(sigma_c))    # σ²_C: scalar → [B, hidden]
-cent_c = F.silu(self.cent_map(mu_c))       # μ_C: vector → [B, hidden]
-
-c = c + disp_c + cent_c                    # fused conditioning
-```
-
-`disp_map`: `nn.Linear(1, hidden_size)`
-`cent_map`: `nn.Linear(d_emb, hidden_size)`
-
-This allows a single model to produce tight continuations (low σ²_C) or diverse ones (high σ²_C) without separate models.
-
-### 3.3 Training
-
-- Reference tokens are **never masked** (fixed context), identical to DDBC.
+The fifteen reference item blocks remain visible throughout training and reverse
+diffusion, providing the conditioning history for all five target blocks.
 - Every eligible chronological segment becomes a 20-song rolling window with
   exactly 15 references and five continuation targets.
 - Training samples require all 20 songs; stride is one song.
-- σ²_C and μ_C are computed from the reference items in each training batch.
-- Passed through `_forward_pass_diffusion` → `forward` → DIT.
 
 Inference uses the same full sequence layout as training. It appends five target
 slots whose 60 payload positions are all MASK, then jointly reverse-denoises
@@ -279,12 +247,12 @@ WP-D synthesis/audio evaluation remains a separate later stage:
 
 | File | Change |
 |---|---|
-| `models/dit.py` | Add `disp_map`, `cent_map`; inject σ²_C, μ_C into conditioning |
-| `diffusion.py` | Pass μ_C, σ²_C through full call chain; generation not restricted to catalog items |
-| `tokenizer.py` | Vocab = 2894; stride k=13; L=3/K=256 RVQ (1-indexed); load `item2cues.json`; update illegal-mask table |
-| `dataset.py` | Compute μ_C, σ²_C per batch; filter: original length 30–90, freq≥10, post-filter 10–60 |
+| `models/dit.py` | Condition on visible history tokens |
+| `diffusion.py` | Full-mask continuation; generation not restricted to catalog items |
+| `tokenizer.py` | Vocab = 2894; main stride k=13; configurable 0/4/8/16 cues; update legal-position mask |
+| `dataset.py` | Build rolling 15-to-5 windows; cache optional history diagnostics |
 | `evaluator.py` | Replace retrieval metrics with FAD, CLAP-Sim, Δσ², CD, MERT/CLAP/ImageBind semantic sim |
-| `configs/config.yaml` | vocab_size=2894, rq_n_codebooks=3, rq_codebook_size=256, stride=13, dispersion_cond=true |
+| `configs/config.yaml` | vocab_size=2894, rq_n_codebooks=3, rq_codebook_size=256, active_cue_tokens=8 |
 | `verbalization.py` | kNN via faiss; LLM prompt assembly from cues + neighbor metadata; Qwen3 API call |
 | `synthesis.py` | ACE-Step frozen pipeline wrapper; style_ref_audio_path support |
 
@@ -298,13 +266,12 @@ WP-D synthesis/audio evaluation remains a separate later stage:
 | Embedding: CLHE backbone, frozen (clhe_weight.npy, 768×64) | ✓ |
 | RVQ: L=3 codebooks, K=256 entries, 1-indexed codes | ✓ |
 | Conflict digit z_conf: 74 observed values (range 769–842) | ✓ |
-| Token stride: k=13 per item | ✓ |
+| Main token stride: k=13 per item; 0/4/16-cue ablations retrain | ✓ |
 | Vocab size: 2894 (incl. MASK token) | ✓ |
 | Creative cues vocab size: 2048 | ✓ |
 | Stored cue candidates per item: 16, active prefix: 8 | ✓ |
 | Training: rolling 15 references → five targets (20 total) | ✓ |
 | Evaluation: first 20, one joint five-item completion | ✓ |
-| Dispersion conditioning via additive SiLU projection | ✓ |
+| Preference conditioning through visible history tokens | ✓ |
 | Verbalization: kNN in CLHE space + Qwen3 LLM (no T5) | ✓ |
 | Synthesis: ACE-Step (frozen) | ✓ |
-| Avg σ²_C (v2 training set): 0.282 (Q33=0.255, Q66=0.310) | ✓ |

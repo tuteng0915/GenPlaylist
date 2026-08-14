@@ -334,7 +334,7 @@ class Diffusion(L.LightningModule):
   def forward(
       self, x, sigma, context_emb=None, mu_c=None, sigma_c2=None,
       sequence_mask=None):
-    """Returns log score."""
+    """Return log scores conditioned on visible tokens and playlist statistics."""
     sigma = self._process_sigma(sigma)
     with torch.cuda.amp.autocast(dtype=torch.float32): # la
       logits = self.backbone(
@@ -409,7 +409,7 @@ class Diffusion(L.LightningModule):
       'sequence_mask', torch.ones_like(batch['input_ids'], dtype=torch.bool))
     mu_c = batch.get('mu_c', None)
     sigma_c2 = batch.get('sigma_c2', None)
-    if not getattr(self.config.sampling, 'structure_conditioning', True):
+    if not getattr(self.config.sampling, 'structure_conditioning', False):
       mu_c = None
       sigma_c2 = None
     if mu_c is not None:
@@ -1580,7 +1580,7 @@ class Diffusion(L.LightningModule):
     cfg_enabled = getattr(self.config.sampling, 'cfg_enabled', False)
     if not cfg_enabled:
       context_emb = None
-    if not getattr(self.config.sampling, 'structure_conditioning', True):
+    if not getattr(self.config.sampling, 'structure_conditioning', False):
       mu_c = None
       sigma_c2 = None
     cfg_w = getattr(self.config.sampling, 'cfg_w', 1.0)
@@ -1693,7 +1693,7 @@ class Diffusion(L.LightningModule):
     context_emb = prepare_condition(context_emb)
     mu_c = prepare_condition(mu_c)
     sigma_c2 = prepare_condition(sigma_c2)
-    if not getattr(self.config.sampling, 'structure_conditioning', True):
+    if not getattr(self.config.sampling, 'structure_conditioning', False):
       mu_c = None
       sigma_c2 = None
 
@@ -1734,8 +1734,8 @@ class Diffusion(L.LightningModule):
             # Two-pass CFG: geometric interpolation in log-prob space
             log_p_cond = self.forward(
               x, sigma_t, context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2)
-            # CFG drops only the optional prefix encoder; playlist structure is
-            # retained because training does not drop mu_c/sigma_c2.
+            # CFG drops only the optional prefix encoder. Any explicitly enabled
+            # legacy structure condition is shared by both passes.
             log_p_uncond = self.forward(
               x, sigma_t, context_emb=None, mu_c=mu_c, sigma_c2=sigma_c2)
             log_p_guided = log_p_uncond + cfg_w * (log_p_cond - log_p_uncond)

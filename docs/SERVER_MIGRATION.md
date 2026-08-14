@@ -196,8 +196,8 @@ conda run -n music python scripts/check_ddbc_warmstart.py --backward-smoke
 ```
 
 The default Spotify configuration now selects `GenPlaylistTokenizer`, reads the
-canonical data directory, uses a 13-token stride, and conditions DiT on
-`mu_c`/`sigma_c2`. Training uses exactly 15 references plus five continuation
+canonical data directory, and uses the 8-cue main model's 13-token stride.
+Visible reference tokens condition DiT. Training uses exactly 15 references plus five continuation
 targets (20 songs total). Each eligible
 training playlist yields all rolling 20-song windows with stride one. The
 original val and test sources are merged into one 941-row unified test set after
@@ -220,7 +220,7 @@ once before launching training:
 conda run -n music python scripts/prepare_wp_c_data.py \
   --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
   --artifact-dir data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v3-20item-joint-15to5
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v4-8cue-20item-joint-15to5
 ```
 
 `train_spotify.sh` resolves that directory from `GENPLAYLIST_DATA_ROOT` by

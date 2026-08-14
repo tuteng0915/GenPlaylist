@@ -1,4 +1,4 @@
-"""Load and validate the offline-prepared GenPlaylist-v3 DatasetDict."""
+"""Load and validate the offline-prepared GenPlaylist-v4 DatasetDict."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL
 from shared.schema import SCHEMA_VERSION, TOKEN_LAYOUT
 
 
-PREPARED_DATA_VERSION = "genplaylist-v3-20item-joint-15to5"
+PREPARED_DATA_VERSION = "genplaylist-v4-configurable-cues-20item-joint-15to5"
 EXPECTED_SPLIT_COUNTS = {"train": 57331, "test": 941}
 PREPARATION_CODE_FILES = (
     "scripts/prepare_wp_c_data.py",
@@ -114,7 +114,7 @@ def validate_prepared_manifest(manifest: dict, config, tokenizer) -> None:
         raise ValueError(
             f"Prepared split counts drifted: {manifest.get('split_counts')}")
     expected_layout = {
-        "tokens_per_item": TOKEN_LAYOUT.tokens_per_item,
+        "tokens_per_item": tokenizer.tokens_per_item,
         "runtime_vocab_size": TOKEN_LAYOUT.runtime_vocab_size,
         "model_length": FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
             tokenizer.tokens_per_item),

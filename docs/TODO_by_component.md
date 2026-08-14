@@ -26,11 +26,11 @@ consume one selected latent plan until its demo contract is revised separately.
 
 ## WP-C — DDBC backbone and joint continuation prediction
 
-- [x] Freeze the 13-token item layout and legal position masks.
+- [x] Freeze the 8-cue main layout and support separately trained 0/4/16-cue layouts.
 - [x] Expand every eligible playlist into rolling 20-song windows with stride one.
 - [x] Require exactly 15 references plus five targets in training data.
 - [x] Keep reference tokens fixed; corrupt and score all five target payloads.
-- [x] Condition DDBC/DiT on reference centroid `mu_c` and dispersion `sigma_c2`.
+- [x] Condition DiT on the visible reference-token history.
 - [x] Add full-mask completion that appends five `[BOI, MASK×12]` blocks.
 - [x] Keep the legacy next-block/semi-AR sampler out of the production path.
 - [x] Freeze evaluation to first 20 songs: 15 references and five targets.
@@ -42,7 +42,8 @@ consume one selected latent plan until its demo contract is revised separately.
 - [ ] Run the frozen joint 15->5 evaluation with the newly trained checkpoint.
 - [x] Add a versioned official evaluator that freezes EMA, seed 1, 256 steps,
   full-catalog retrieval, and atomic result metadata.
-- [x] Add an opt-in, loss-scale-normalized RVQ/cue curriculum and effective-weight logs.
+- [x] Use the loss-scale-normalized RVQ/cue curriculum in Full and retain
+      uniform weighting as an ablation; log effective weights.
 - [x] Add order-free generated-cue multiset metrics for the five-item continuation.
 - [ ] Compare the uniform-loss baseline with the RVQ/cue curriculum under an otherwise identical schedule.
 

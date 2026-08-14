@@ -1,5 +1,9 @@
 # GenPlaylist: Reference-Conditioned Next-Song Generation with DDBC
 
+> **Historical note.** This proposal predates the frozen personalized-generation
+> paper story. The current protocol and terminology are documented in
+> `WP_C_TRAIN_EVAL_PROTOCOL.md` and `design.md`.
+
 **Authors:** Anonymous | **Venue:** Under review | **Year:** 2025
 **Local PDF:** [main.pdf](../main.pdf)
 
@@ -7,7 +11,7 @@
 
 ## TL;DR
 
-GenPlaylist bridges playlist continuation and music synthesis. Given 15 ordered reference tracks, DDBC jointly predicts a five-item latent continuation while conditioning on the references' semantic centroid and dispersion. The unchanged WP-D demo consumes one selected latent plan for LLM verbalization and ACE-Step synthesis; the selection policy and joint multi-song synthesis remain outside the frozen demo scope.
+GenPlaylist bridges playlist continuation and music synthesis. Given 15 ordered reference tracks, DDBC jointly predicts a five-item latent continuation conditioned on the visible history. The unchanged WP-D demo consumes one selected latent plan for LLM verbalization and ACE-Step synthesis; the selection policy and joint multi-song synthesis remain outside the frozen demo scope.
 
 ---
 

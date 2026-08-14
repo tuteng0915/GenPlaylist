@@ -10,13 +10,30 @@ export PYTHONPATH="$WP_ROOT:${PYTHONPATH:-}"
 
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
-DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v3-20item-joint-15to5"
+DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v4-8cue-20item-joint-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
 EVAL_CKPT="${GENPLAYLIST_EVAL_CKPT:-}"
 MODEL_SIZE="${GENPLAYLIST_MODEL_SIZE:-small}"
 EVAL_BATCH_SIZE="${GENPLAYLIST_EVAL_BATCH_SIZE:-32}"
 EVAL_SEED="${GENPLAYLIST_EVAL_SEED:-1}"
 ALLOW_PROTOCOL_OVERRIDE="${GENPLAYLIST_EVAL_ALLOW_PROTOCOL_OVERRIDE:-false}"
+ACTIVE_CUES="${GENPLAYLIST_ACTIVE_CUES:-8}"
+STRUCTURE_CONDITIONING="${GENPLAYLIST_STRUCTURE_CONDITIONING:-false}"
+case "$ACTIVE_CUES" in
+  0|4|8|16) ;;
+  *)
+    echo "GENPLAYLIST_ACTIVE_CUES must be one of 0, 4, 8, or 16" >&2
+    exit 2
+    ;;
+esac
+MODEL_LENGTH=$((2 + 20 * (5 + ACTIVE_CUES)))
+case "$STRUCTURE_CONDITIONING" in
+  true|false) ;;
+  *)
+    echo "GENPLAYLIST_STRUCTURE_CONDITIONING must be true or false" >&2
+    exit 2
+    ;;
+esac
 
 # The official protocol uses 256 reverse-diffusion steps. Shorter settings are
 # smoke tests and must write to a separately named result file.
@@ -30,7 +47,7 @@ if [[ -z "$EVAL_CKPT" ]]; then
 fi
 
 CKPT_LABEL="$(basename "$EVAL_CKPT" .ckpt)"
-RESULTS_PATH="${GENPLAYLIST_EVAL_RESULTS_PATH:-$RESULTS_ROOT/wp-c-${CKPT_LABEL}-steps${SAMPLING_STEPS}-seed${EVAL_SEED}-${STAMP}.json}"
+RESULTS_PATH="${GENPLAYLIST_EVAL_RESULTS_PATH:-$RESULTS_ROOT/wp-c-${CKPT_LABEL}-${ACTIVE_CUES}cue-structure${STRUCTURE_CONDITIONING}-steps${SAMPLING_STEPS}-seed${EVAL_SEED}-${STAMP}.json}"
 
 for required in \
   "$EVAL_CKPT" \
@@ -66,6 +83,9 @@ python main.py \
   cue_vocab_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_vocab.json" \
   cue_manifest_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_manifest.json" \
   prepared_dataset_path="$PREPARED_DATA_ROOT" \
+  active_cue_tokens="$ACTIVE_CUES" \
+  model.length="$MODEL_LENGTH" \
+  sampling.structure_conditioning="$STRUCTURE_CONDITIONING" \
   eval.checkpoint_path="$EVAL_CKPT" \
   eval.results_path="$RESULTS_PATH" \
   eval.git_commit="$GIT_COMMIT" \
@@ -76,6 +96,6 @@ python main.py \
   sampling.steps="$SAMPLING_STEPS" \
   parameterization=subs \
   eval.compute_generative_perplexity=false \
-  +run_name="genplaylist-v3-joint15to5-official-eval-${STAMP}"
+  +run_name="genplaylist-v4-${ACTIVE_CUES}cue-structure${STRUCTURE_CONDITIONING}-joint15to5-official-eval-${STAMP}"
 
 echo "Official WP-C result: $RESULTS_PATH"

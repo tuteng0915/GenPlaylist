@@ -11,14 +11,34 @@ TRAIN_MODE="${GENPLAYLIST_TRAIN_MODE:-warmstart}"
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
 WARMSTART_CKPT="${GENPLAYLIST_WARMSTART_CKPT:-$REPO_ROOT/checkpoints/pretrained/ddbc/spotify30.ckpt}"
-DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v3-20item-joint-15to5"
+DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v4-8cue-20item-joint-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
 MODEL_SIZE="${GENPLAYLIST_MODEL_SIZE:-small}"
 GLOBAL_BATCH_SIZE="${GENPLAYLIST_GLOBAL_BATCH_SIZE:-512}"
 TRAIN_BATCH_SIZE="${GENPLAYLIST_TRAIN_BATCH_SIZE:-256}"
 MAX_STEPS="${GENPLAYLIST_MAX_STEPS:-20000}"
 LIMIT_TRAIN_BATCHES="${GENPLAYLIST_LIMIT_TRAIN_BATCHES:-1.0}"
-LOSS_CURRICULUM="${GENPLAYLIST_LAYER_LOSS_CURRICULUM:-false}"
+LOSS_CURRICULUM="${GENPLAYLIST_LAYER_LOSS_CURRICULUM:-true}"
+ACTIVE_CUES="${GENPLAYLIST_ACTIVE_CUES:-8}"
+STRUCTURE_CONDITIONING="${GENPLAYLIST_STRUCTURE_CONDITIONING:-false}"
+
+case "$ACTIVE_CUES" in
+  0|4|8|16) ;;
+  *)
+    echo "GENPLAYLIST_ACTIVE_CUES must be one of 0, 4, 8, or 16" >&2
+    exit 2
+    ;;
+esac
+MODEL_LENGTH=$((2 + 20 * (5 + ACTIVE_CUES)))
+
+case "$STRUCTURE_CONDITIONING" in
+  true) STRUCTURE_VARIANT="with-structure" ;;
+  false) STRUCTURE_VARIANT="no-structure" ;;
+  *)
+    echo "GENPLAYLIST_STRUCTURE_CONDITIONING must be true or false" >&2
+    exit 2
+    ;;
+esac
 
 case "$LOSS_CURRICULUM" in
   true)
@@ -69,7 +89,7 @@ case "$TRAIN_MODE" in
 esac
 
 # Generate unique run name with timestamp to avoid conflicts
-RUN_NAME="genplaylist-v3-spotify-joint15to5-${LOSS_VARIANT}-$(date +%Y%m%d-%H%M%S)"
+RUN_NAME="genplaylist-v4-spotify-joint15to5-${ACTIVE_CUES}cue-${STRUCTURE_VARIANT}-${LOSS_VARIANT}-$(date +%Y%m%d-%H%M%S)"
 
 cd "$WP_ROOT"
 python main.py \
@@ -87,6 +107,9 @@ python main.py \
   cue_vocab_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_vocab.json" \
   cue_manifest_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_manifest.json" \
   prepared_dataset_path="$PREPARED_DATA_ROOT" \
+  active_cue_tokens="$ACTIVE_CUES" \
+  model.length="$MODEL_LENGTH" \
+  sampling.structure_conditioning="$STRUCTURE_CONDITIONING" \
   +run_name=${RUN_NAME} \
   trainer.max_steps="$MAX_STEPS" \
   trainer.limit_train_batches="$LIMIT_TRAIN_BATCHES" \

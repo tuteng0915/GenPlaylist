@@ -23,8 +23,10 @@ class NextSongProtocol:
     def train_reference_items(self) -> int:
         return self.train_total_items - self.train_target_items
 
-    def model_token_length(self, tokens_per_item: int) -> int:
-        return 2 + self.train_total_items * int(tokens_per_item)
+    def model_token_length(self, tokens_per_item: int, items: int | None = None) -> int:
+        """BOS/EOS plus ``items`` fixed-stride item blocks."""
+        item_count = self.train_total_items if items is None else int(items)
+        return 2 + item_count * int(tokens_per_item)
 
     def validate(self) -> "NextSongProtocol":
         if self.min_reference_items != self.train_reference_items:

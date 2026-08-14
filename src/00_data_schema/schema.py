@@ -444,7 +444,8 @@ class GeneratedItem:
     z_hat_emb     : CLHE embedding decoded from rvq_codes, shape (CLHE_EMB_DIM,)=(64,).
     mu_c_emb      : playlist centroid, shape (64,). Same for all S samples.
     sigma_c2      : playlist dispersion σ²_C ≥ 0. Same for all S samples.
-    cue_ids       : exactly CUE_TOKENS=8 creative cue indices.
+    cue_ids       : 0--CUE_CANDIDATES_PER_ITEM ranked creative cue indices;
+                    the main model uses the first CUE_TOKENS=8.
     sample_idx    : which of the S samples this is (0-indexed).
     context_prefix: the ContextPrefix used as input.
     """
@@ -478,8 +479,13 @@ class GeneratedItem:
             raise ValueError(f"sigma_c2 must be finite and ≥ 0, got {self.sigma_c2}")
         if not self.cue_ids and allow_missing_cues:
             return self
-        CueMappingEntry(item_id="<generated>", cue_ids=self.cue_ids).validate(
-            n_cues=CUE_TOKENS)
+        if len(self.cue_ids) > CUE_CANDIDATES_PER_ITEM:
+            raise ValueError(
+                f"GeneratedItem supports at most {CUE_CANDIDATES_PER_ITEM} cues, "
+                f"got {len(self.cue_ids)}")
+        if not all(isinstance(c, int) and 0 <= c < CUE_VOCAB_SIZE for c in self.cue_ids):
+            raise ValueError(
+                f"Cue ID out of [0, {CUE_VOCAB_SIZE}) for generated item: {self.cue_ids}")
         return self
 
 

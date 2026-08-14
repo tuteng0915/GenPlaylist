@@ -41,6 +41,9 @@ def _configure(args):
     config.item2cues_path = str(cue_dir / "item2cues.json")
     config.cue_vocab_path = str(cue_dir / "cue_vocab.json")
     config.cue_manifest_path = str(cue_dir / "cue_manifest.json")
+    config.active_cue_tokens = args.active_cues
+    config.model.length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        1 + TOKEN_LAYOUT.rq_n_codebooks + 1 + args.active_cues)
     return config
 
 
@@ -119,12 +122,18 @@ def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
     train_batch = tokenizer.collate_batch(train_examples)
     if train_batch["input_ids"].shape[1] > FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
             tokenizer.tokens_per_item):
-        raise ValueError("Collated train sequence exceeds frozen 262-token maximum")
-    if not np.all(train_batch["target_mask"].numpy().sum(axis=1) == 60):
-        raise ValueError("Each train row must expose exactly 60 target payload tokens")
+        raise ValueError("Collated train sequence exceeds the configured model length")
+    expected_target_tokens = (
+        FROZEN_NEXT_SONG_PROTOCOL.train_target_items * (tokenizer.tokens_per_item - 1))
+    if not np.all(
+            train_batch["target_mask"].numpy().sum(axis=1) == expected_target_tokens):
+        raise ValueError(
+            f"Each train row must expose exactly {expected_target_tokens} target tokens")
 
     test_batch = tokenizer.collate_batch([tokenized["test"][0], tokenized["test"][-1]])
-    if tuple(test_batch["input_ids"].shape) != (2, 197):
+    expected_context_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        tokenizer.tokens_per_item, items=FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items)
+    if tuple(test_batch["input_ids"].shape) != (2, expected_context_length):
         raise ValueError(f"Test context shape drifted: {tuple(test_batch['input_ids'].shape)}")
     if tuple(test_batch["labels"].shape) != (2, 5, 4):
         raise ValueError(f"Test label shape drifted: {tuple(test_batch['labels'].shape)}")
@@ -164,7 +173,9 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
         [tokenizer.stored_item2cues[item_id] for item_id in row_to_item], dtype=np.int16)
     _assert_array_equal(semantic, expected_semantic, "catalog semantic tokens")
     _assert_array_equal(stored_cues, expected_stored_cues, "catalog stored cues")
-    _assert_array_equal(active_cues, expected_stored_cues[:, :8], "catalog active cues")
+    _assert_array_equal(
+        active_cues, expected_stored_cues[:, :tokenizer.active_cues],
+        "catalog active cues")
 
     catalog_l2 = _load_vector(vector_dir, manifest, "catalog_embeddings_l2.npy")
     _assert_array_close(catalog_l2, catalog / np.linalg.norm(catalog, axis=1, keepdims=True),
@@ -249,17 +260,26 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
     completion_ids = _load_vector(vector_dir, manifest, "eval_completion_input_ids.npy")
     completion_mask = _load_vector(vector_dir, manifest, "eval_completion_mask.npy")
     expected_test = EXPECTED_SPLIT_COUNTS["test"]
-    if context_ids.shape != (expected_test, 197) or completion_ids.shape != (
-            expected_test, 262):
+    context_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        tokenizer.tokens_per_item, items=FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items)
+    completion_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        tokenizer.tokens_per_item)
+    if context_ids.shape != (expected_test, context_length) or completion_ids.shape != (
+            expected_test, completion_length):
         raise ValueError("Evaluation context/completion token shapes drifted")
-    if not np.all(completion_mask.sum(axis=1) == 60):
-        raise ValueError("Each evaluation completion must mask exactly 60 payload tokens")
+    expected_masked = (
+        FROZEN_NEXT_SONG_PROTOCOL.eval_generated_items * (tokenizer.tokens_per_item - 1))
+    if not np.all(completion_mask.sum(axis=1) == expected_masked):
+        raise ValueError(
+            f"Each evaluation completion must mask exactly {expected_masked} tokens")
     if not np.all(completion_ids[completion_mask] == TOKEN_LAYOUT.mask_token):
         raise ValueError("Evaluation completion payload contains a non-MASK token")
-    _assert_array_equal(completion_ids[:, :196], context_ids[:, :196],
+    context_payload_end = context_length - 1
+    _assert_array_equal(
+        completion_ids[:, :context_payload_end], context_ids[:, :context_payload_end],
                         "evaluation completion reference prefix")
     for item_index in range(5):
-        boi_position = 196 + item_index * TOKEN_LAYOUT.tokens_per_item
+        boi_position = context_payload_end + item_index * tokenizer.tokens_per_item
         if not np.all(completion_ids[:, boi_position] == TOKEN_LAYOUT.boi_token):
             raise ValueError(
                 f"Evaluation completion target {item_index} is missing BOI")
@@ -280,6 +300,10 @@ def main() -> int:
         "--cue-dir", type=Path,
         default=SRC_ROOT / "02_creative_cues" / "outputs" / "production" / "latest")
     parser.add_argument("--prepared-dir", type=Path, required=True)
+    parser.add_argument(
+        "--active-cues", type=int, default=TOKEN_LAYOUT.cue_tokens,
+        choices=(0, 4, 8, 16),
+        help="Cue count used when this prepared dataset was built.")
     args = parser.parse_args()
 
     root = args.prepared_dir.expanduser().resolve()
