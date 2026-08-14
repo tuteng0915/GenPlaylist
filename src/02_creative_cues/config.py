@@ -19,6 +19,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "00_data_schema"))
 from schema import CUE_CANDIDATES_PER_ITEM, CUE_TOKENS, CUE_VOCAB_SIZE  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cue_normalize  # noqa: E402
+
 
 @dataclass(frozen=True)
 class ProductionConfig:
@@ -38,7 +41,12 @@ class ProductionConfig:
     lyrics_cap: int = 2000              # char cap for cap/dedup modes
 
     # Step 2 — cleaning
-    min_df: int = 5                     # min songs a cue must appear in
+    min_df_frac: float = cue_normalize.MIN_DF_FRAC_DEFAULT
+    # ^ min songs a cue must appear in, as a fraction of the corpus actually being
+    # built (resolve_min_df(min_df_frac, len(items)), floored at MIN_DF_FLOOR=2) —
+    # not a fixed absolute count, so smoke tests (--limit) and future catalog growth
+    # both get a proportionally appropriate floor instead of reusing the full-catalog
+    # value. Validated in sweeps/sweep_min_df.py; see resolve_min_df's docstring.
     max_df_frac: float = 0.3            # drop cues in more than this fraction of songs
     dedup_threshold: float = 0.92       # cosine above which near-duplicate cues merge
     rank_by: str = "idf"                # stage-5 vocabulary selection rule

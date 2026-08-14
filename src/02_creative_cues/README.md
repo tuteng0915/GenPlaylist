@@ -65,17 +65,25 @@ preset, don't reach for a flag.
 
 ### Presets (`config.py`)
 
-| Preset | method | rank_by | num_cues | min_df | top_n | lyrics_mode |
+| Preset | method | rank_by | num_cues | min_df_frac | top_n | lyrics_mode |
 |---|---|---|---|---|---|---|
-| `default` | `llm` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
-| `tfidf` | `tfidf` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
-| `research-18-cues` | `llm` | `idf` | 18 | 5 | 100 | `dedup` |
+| `default` | `llm` | `idf` | **16 stored / 8 active** | 0.002 | 100 | `dedup` |
+| `tfidf` | `tfidf` | `idf` | **16 stored / 8 active** | 0.002 | 100 | `dedup` |
+| `research-18-cues` | `llm` | `idf` | 18 | 0.002 | 100 | `dedup` |
 
 `default` is the WP-C-compatible production contract: a 2,048-entry cue
 vocabulary and a relevance-ranked **16-candidate table per song**. WP-C consumes
 the first 8 candidates, so 4/8/12/16-cue ablations share one frozen table.
 `tfidf` keeps the same interface as an API-free baseline. `research-18-cues` is
 an ablation only and does not match the frozen 16-candidate artifact contract.
+
+`min_df_frac` is corpus-relative, not a fixed count: the df-band floor actually
+applied is `min_df = max(2, round(min_df_frac * n_items))`, resolved at run time
+against however many songs this run actually builds from (respects `--limit`,
+so a smoke test doesn't inherit the full catalog's floor). On the current
+~5,119-song catalog, `0.002` resolves to `min_df=10`. Validated via a min_df
+ablation at two corpus sizes (N=2000 and N=5000) — see `sweeps/sweep_min_df.py`
+and `cue_normalize.resolve_min_df`'s docstring for the evidence and formula.
 
 Add a new preset in `config.py` (as a `replace(DEFAULT, ...)` entry in
 `PRESETS`) when a setting changes, rather than adding a new CLI flag.
@@ -128,12 +136,14 @@ everywhere else in the pipeline.
 ```
 
 **`run_config.json`** — every resolved `ProductionConfig` field (`method`,
-`limit`, `top_n`, `lyrics_mode`, `lyrics_cap`, `min_df`, `max_df_frac`,
+`limit`, `top_n`, `lyrics_mode`, `lyrics_cap`, `min_df_frac`, `max_df_frac`,
 `dedup_threshold`, `rank_by`, `vocab_size`, `num_cues`, `active_cues`,
 `assignment_strategy`, `candidate_k`, `embedder`, `force`) plus
-`preset`, `generated` (timestamp), `n_items`, `n_with_lyrics`. This is the
-source of truth for the `num_cues`/`vocab_size` a given `item2cues.json`/
-`cue_vocab.json` was built with.
+`preset`, `generated` (timestamp), `n_items`, `n_with_lyrics`, and `min_df` —
+the absolute df-band floor actually resolved from `min_df_frac * n_items` for
+*this* run (not itself a `ProductionConfig` field, since it depends on the
+corpus size at run time). This is the source of truth for the `num_cues`/
+`vocab_size`/`min_df` a given `item2cues.json`/`cue_vocab.json` was built with.
 
 **`health_report.md`** — human-readable only, not a stable machine schema.
 Coverage rate, UNK rate, vocab utilization, cue entropy, top-10 cues table.

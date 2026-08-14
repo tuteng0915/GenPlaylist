@@ -226,6 +226,27 @@ def compute_df(raw_cues: dict[str, list[str]]) -> tuple[collections.Counter, int
     return df, len(raw_cues)
 
 
+MIN_DF_FRAC_DEFAULT = 0.002   # production default; see resolve_min_df
+MIN_DF_FLOOR = 2              # never filter this permissively regardless of corpus size
+
+
+def resolve_min_df(min_df_frac: float, n_docs: int, floor: int = MIN_DF_FLOOR) -> int:
+    """Turn a corpus-relative min_df fraction into the absolute min_df df_band_filter needs.
+
+    min_df(N) = max(floor, round(min_df_frac * N)) -- keeps the df-band noise floor
+    scale-free across corpus sizes instead of a fixed absolute count. A fixed
+    min_df=5 implies an ever-shrinking relative prevalence requirement as N grows
+    (0.5% at N=1000, only 0.1% at N=5000); this keeps that requirement constant.
+
+    Validated in sweeps/sweep_min_df.py: the same ~0.2%-of-corpus floor
+    (min_df_frac=0.002) won or tied on retrieval/grounding/reconstruction/LLM-judge
+    at both N=2000 (-> min_df=4) and N=5000 (-> min_df=10), while a fixed min_df=5
+    under-filtered at N=5000 and higher fracs (0.005, 0.01) over-filtered at both
+    sizes -- see outputs/test-mindf/ for the reports.
+    """
+    return max(floor, round(min_df_frac * n_docs))
+
+
 def df_band_filter(
     cues: list[str],
     df: collections.Counter,
