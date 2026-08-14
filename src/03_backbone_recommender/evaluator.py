@@ -10,7 +10,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import cosine_distances
 import matplotlib.pyplot as plt
 
-from many_to_many_metrics import calculate_many_to_many_metrics
+from many_to_many_metrics import (
+    calculate_cue_multiset_metrics,
+    calculate_many_to_many_metrics,
+)
 
 class Evaluator:
     def __init__(self, config, tokenizer):
@@ -552,26 +555,43 @@ class Evaluator:
     def count_legal(self,preds):
         return
 
-    def calculate_five_by_five_metrics(self, preds, labels):
-        """Evaluate five independent next-one samples against five future songs."""
-        expected_samples = int(self.config.get('num_samples', 5))
-        if preds.ndim != 4 or preds.shape[2] != 1:
+    def calculate_five_by_five_metrics(
+            self, preds, labels, predicted_cues=None):
+        """Evaluate one joint five-item completion against five future songs."""
+        expected_draws = int(self.config.get('num_samples', 1))
+        expected_items = int(self.config.get('generated_items', 5))
+        if preds.ndim != 4:
             raise ValueError(
-                "Many-to-many evaluation expects [batch, samples, 1, semantic_tokens], "
+                "Many-to-many evaluation expects [batch, draws, items, semantic_tokens], "
                 f"got {tuple(preds.shape)}")
         if labels.ndim != 3:
             raise ValueError(f"Expected [batch, targets, semantic_tokens], got {labels.shape}")
-        if preds.shape[1] != expected_samples or labels.shape[1] != expected_samples:
+        if (preds.shape[1] != expected_draws or preds.shape[2] != expected_items
+                or labels.shape[1] != expected_items):
             raise ValueError(
-                f"Frozen evaluation requires {expected_samples} samples and targets, got "
-                f"{preds.shape[1]} and {labels.shape[1]}")
+                f"Frozen joint evaluation requires {expected_draws} draw with "
+                f"{expected_items} predictions/targets, got predictions={preds.shape[1:3]} "
+                f"and targets={labels.shape[1]}")
+
+        joint_predictions = preds[:, 0]
+        joint_prediction_cues = None
+        if predicted_cues is not None:
+            if (predicted_cues.ndim != 4
+                    or predicted_cues.shape[:3] != preds.shape[:3]):
+                raise ValueError(
+                    "Generated cues must have shape [batch, draws, items, cues], "
+                    f"got {tuple(predicted_cues.shape)}")
+            joint_prediction_cues = predicted_cues[:, 0].detach().cpu().numpy()
 
         batch_size = preds.shape[0]
         embedding_dim = int(self.feature.shape[1])
         prediction_features = np.zeros(
-            (batch_size, expected_samples, embedding_dim), dtype=np.float32)
+            (batch_size, expected_items, embedding_dim), dtype=np.float32)
         target_features = np.zeros_like(prediction_features)
-        prediction_ids = np.empty((batch_size, expected_samples), dtype=object)
+        target_cues = (
+            np.zeros_like(joint_prediction_cues)
+            if joint_prediction_cues is not None else None)
+        prediction_ids = np.empty((batch_size, expected_items), dtype=object)
         target_ids = np.empty_like(prediction_ids)
         catalog_features = self.feature.detach().cpu().numpy().astype(np.float32)
         catalog_norms = np.linalg.norm(catalog_features, axis=1)
@@ -579,8 +599,8 @@ class Evaluator:
         from collections import Counter
         for batch_index in range(batch_size):
             predicted_token_tuples = []
-            for sample_index in range(expected_samples):
-                token_tuple = tuple(preds[batch_index, sample_index, 0].tolist())
+            for item_index in range(expected_items):
+                token_tuple = tuple(joint_predictions[batch_index, item_index].tolist())
                 predicted_token_tuples.append(token_tuple)
                 raw_feature = np.asarray(
                     self.tokenizer._token_to_feature(token_tuple), dtype=np.float32)
@@ -605,8 +625,8 @@ class Evaluator:
                 # The recommendation is the retrieved catalog item.  Use its
                 # frozen CLHE embedding consistently for both direct hits and
                 # RVQ misses in the subsequent 5x5 semantic assignment.
-                prediction_features[batch_index, sample_index] = selected_feature
-                prediction_ids[batch_index, sample_index] = item_id
+                prediction_features[batch_index, item_index] = selected_feature
+                prediction_ids[batch_index, item_index] = item_id
                 self.retrieval_similarities.append(similarity)
                 self.total_predictions += 1
 
@@ -627,7 +647,7 @@ class Evaluator:
             self.samples_with_rvq_dup += int(rvq_duplicates > 0)
             self.samples_with_item_dup += int(item_duplicates > 0)
 
-            for target_index in range(expected_samples):
+            for target_index in range(expected_items):
                 target_tuple = tuple(labels[batch_index, target_index].tolist())
                 if target_tuple not in self.token2id:
                     raise ValueError(f"Ground-truth semantic ID is not in catalog: {target_tuple}")
@@ -635,10 +655,22 @@ class Evaluator:
                 target_ids[batch_index, target_index] = target_id
                 target_features[batch_index, target_index] = catalog_features[
                     self.item_id_to_row[target_id]]
+                if target_cues is not None:
+                    semantic_width = self.tokenizer.n_digit + 1
+                    encoded_target = self.tokenizer.encode_item(target_id)
+                    cue_tokens = encoded_target[1 + semantic_width:]
+                    if len(cue_tokens) != target_cues.shape[2]:
+                        raise ValueError(
+                            f"Target {target_id} exposes {len(cue_tokens)} cues; "
+                            f"expected {target_cues.shape[2]}")
+                    target_cues[batch_index, target_index] = cue_tokens
 
         self.total_samples += batch_size
         metrics = calculate_many_to_many_metrics(
             prediction_features, target_features, prediction_ids, target_ids)
+        if joint_prediction_cues is not None:
+            metrics.update(calculate_cue_multiset_metrics(
+                joint_prediction_cues, target_cues))
         print("\n[5x5 Evaluation - First Sample]")
         print(f"  Predicted items: {prediction_ids[0].tolist()}")
         print(f"  Ground truth:    {target_ids[0].tolist()}")
@@ -1015,12 +1047,14 @@ class Evaluator:
         # Reshape into groups of tokens_per_item: [BOI, d0, d1, d2, ...]
         # Already calculated above: tokens_per_item = n_codebooks + 2
         num_items = padded_preds.shape[2] // tokens_per_item
-        preds = padded_preds[:, :, :num_items*tokens_per_item].reshape(batch_size, max_k, num_items, tokens_per_item)
-        print(f"  After reshape: {preds.shape}, num_items per sample: {num_items}")
+        item_tokens = padded_preds[:, :, :num_items*tokens_per_item].reshape(
+            batch_size, max_k, num_items, tokens_per_item)
+        print(f"  After reshape: {item_tokens.shape}, num_items per sample: {num_items}")
 
         # Keep only semantic tokens; creative cues are evaluated separately.
         semantic_width = n_codebooks + 1
-        preds = preds[:, :, :, 1:1 + semantic_width]
+        preds = item_tokens[:, :, :, 1:1 + semantic_width]
+        predicted_cues = item_tokens[:, :, :, 1 + semantic_width:]
 
         # Show extracted RVQ tokens (all items if <= 5, otherwise first 5)
         num_to_print = min(num_items, 5)
@@ -1043,7 +1077,8 @@ class Evaluator:
                 labels.shape[0], -1, tokens_per_item_label)
 
         if labels_item.shape[1] > 1:
-            return self.calculate_five_by_five_metrics(preds, labels_item)
+            return self.calculate_five_by_five_metrics(
+                preds, labels_item, predicted_cues=predicted_cues)
 
         # Check if labels have duplicate items (for debugging)
         label_tuples = [tuple(labels_item[0, i].tolist()) for i in range(labels_item.shape[1])]

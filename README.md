@@ -41,7 +41,7 @@ GenPlaylist_Code/
     │
     ├── 03_backbone_recommender/       # WP-C: DDBC Backbone and Evaluation
     │   ├── diffusion.py               # Dispersion-conditioned masked discrete diffusion
-    │   ├── genplaylist_tokenizer.py   # RVQ + eight-cue contract (13-token stride)
+    │   ├── genplaylist_tokenizer.py   # RVQ + configurable cues (8-cue main model)
     │   ├── tokenizer.py               # Legacy DISCO tokenizer (migration baseline)
     │   ├── playlist_structure.py      # μ_C and σ²_C preference structure computation
     │   ├── dataset.py / dataloader.py

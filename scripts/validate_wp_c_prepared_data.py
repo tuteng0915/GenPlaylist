@@ -41,6 +41,9 @@ def _configure(args):
     config.item2cues_path = str(cue_dir / "item2cues.json")
     config.cue_vocab_path = str(cue_dir / "cue_vocab.json")
     config.cue_manifest_path = str(cue_dir / "cue_manifest.json")
+    config.active_cue_tokens = args.active_cues
+    config.model.length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        1 + TOKEN_LAYOUT.rq_n_codebooks + 1 + args.active_cues)
     return config
 
 
@@ -80,7 +83,7 @@ def _validate_output_hashes(root: Path, manifest: dict) -> None:
 
 
 def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
-    from datasets import load_from_disk
+    from datasets import Dataset, load_from_disk
 
     raw = load_from_disk(str(root / "raw_dataset"))
     raw_counts = {split: len(raw[split]) for split in raw}
@@ -89,31 +92,48 @@ def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
 
     for split, count in EXPECTED_SPLIT_COUNTS.items():
         indices = sorted({0, count // 2, count - 1})
+        source_rows = []
         for index in indices:
-            if raw[split][index] != dataset.split_data[split][index]:
+            source_row = raw[split][index]
+            source_rows.append(source_row)
+            if source_row != dataset.split_data[split][index]:
                 raise ValueError(f"Raw {split}[{index}] differs from source expansion")
 
-        fresh = tokenizer.tokenize({split: raw[split].select(indices)})[split]
-        cached = tokenized[split].select(indices)
+        # Rebuild a tiny in-memory Dataset. Running filter/map directly on the
+        # disk-backed prepared Dataset would create cache-*.arrow files inside
+        # the immutable release directory and invalidate its output manifest.
+        sampled = Dataset.from_dict({
+            column: [row[column] for row in source_rows]
+            for column in raw[split].column_names
+        })
+        fresh = tokenizer.tokenize({split: sampled})[split]
         for sample_index, source_index in enumerate(indices):
             for field in fresh.column_names:
                 left = fresh[sample_index][field]
-                right = cached[sample_index][field]
+                right = tokenized[split][source_index][field]
                 if field in {"context_emb", "mu_c", "sigma_c2"}:
                     _assert_array_close(right, left, f"tokenized {split}[{source_index}].{field}")
                 else:
                     _assert_array_equal(right, left, f"tokenized {split}[{source_index}].{field}")
 
-    train_examples = [tokenized["train"][index] for index in (0, 70000, 140432)]
+    train_count = EXPECTED_SPLIT_COUNTS["train"]
+    train_examples = [
+        tokenized["train"][index] for index in (0, train_count // 2, train_count - 1)]
     train_batch = tokenizer.collate_batch(train_examples)
     if train_batch["input_ids"].shape[1] > FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
             tokenizer.tokens_per_item):
-        raise ValueError("Collated train sequence exceeds frozen 210-token maximum")
-    if not np.all(train_batch["target_mask"].numpy().sum(axis=1) == 12):
-        raise ValueError("Each train row must expose exactly 12 target payload tokens")
+        raise ValueError("Collated train sequence exceeds the configured model length")
+    expected_target_tokens = (
+        FROZEN_NEXT_SONG_PROTOCOL.train_target_items * (tokenizer.tokens_per_item - 1))
+    if not np.all(
+            train_batch["target_mask"].numpy().sum(axis=1) == expected_target_tokens):
+        raise ValueError(
+            f"Each train row must expose exactly {expected_target_tokens} target tokens")
 
     test_batch = tokenizer.collate_batch([tokenized["test"][0], tokenized["test"][-1]])
-    if tuple(test_batch["input_ids"].shape) != (2, 197):
+    expected_context_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        tokenizer.tokens_per_item, items=FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items)
+    if tuple(test_batch["input_ids"].shape) != (2, expected_context_length):
         raise ValueError(f"Test context shape drifted: {tuple(test_batch['input_ids'].shape)}")
     if tuple(test_batch["labels"].shape) != (2, 5, 4):
         raise ValueError(f"Test label shape drifted: {tuple(test_batch['labels'].shape)}")
@@ -153,7 +173,9 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
         [tokenizer.stored_item2cues[item_id] for item_id in row_to_item], dtype=np.int16)
     _assert_array_equal(semantic, expected_semantic, "catalog semantic tokens")
     _assert_array_equal(stored_cues, expected_stored_cues, "catalog stored cues")
-    _assert_array_equal(active_cues, expected_stored_cues[:, :8], "catalog active cues")
+    _assert_array_equal(
+        active_cues, expected_stored_cues[:, :tokenizer.active_cues],
+        "catalog active cues")
 
     catalog_l2 = _load_vector(vector_dir, manifest, "catalog_embeddings_l2.npy")
     _assert_array_close(catalog_l2, catalog / np.linalg.norm(catalog, axis=1, keepdims=True),
@@ -171,7 +193,9 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
         "normalized RVQ reconstructions")
     _assert_array_equal(
         _load_vector(vector_dir, manifest, "full_sequence_type_mask.npy"),
-        tokenizer.make_type_mask(210), "full legal-token type mask")
+        tokenizer.make_type_mask(FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+            tokenizer.tokens_per_item)),
+        "full legal-token type mask")
 
     bundle_ids = _load_vector(vector_dir, manifest, "eval_bundle_ids.npy")
     ref_ids = _load_vector(vector_dir, manifest, "eval_reference_item_ids.npy")
@@ -236,17 +260,29 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
     completion_ids = _load_vector(vector_dir, manifest, "eval_completion_input_ids.npy")
     completion_mask = _load_vector(vector_dir, manifest, "eval_completion_mask.npy")
     expected_test = EXPECTED_SPLIT_COUNTS["test"]
-    if context_ids.shape != (expected_test, 197) or completion_ids.shape != (
-            expected_test, 210):
+    context_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        tokenizer.tokens_per_item, items=FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items)
+    completion_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+        tokenizer.tokens_per_item)
+    if context_ids.shape != (expected_test, context_length) or completion_ids.shape != (
+            expected_test, completion_length):
         raise ValueError("Evaluation context/completion token shapes drifted")
-    if not np.all(completion_mask.sum(axis=1) == 12):
-        raise ValueError("Each evaluation completion must mask exactly 12 payload tokens")
+    expected_masked = (
+        FROZEN_NEXT_SONG_PROTOCOL.eval_generated_items * (tokenizer.tokens_per_item - 1))
+    if not np.all(completion_mask.sum(axis=1) == expected_masked):
+        raise ValueError(
+            f"Each evaluation completion must mask exactly {expected_masked} tokens")
     if not np.all(completion_ids[completion_mask] == TOKEN_LAYOUT.mask_token):
         raise ValueError("Evaluation completion payload contains a non-MASK token")
-    _assert_array_equal(completion_ids[:, :196], context_ids[:, :196],
+    context_payload_end = context_length - 1
+    _assert_array_equal(
+        completion_ids[:, :context_payload_end], context_ids[:, :context_payload_end],
                         "evaluation completion reference prefix")
-    if not np.all(completion_ids[:, 196] == TOKEN_LAYOUT.boi_token):
-        raise ValueError("Evaluation completion does not place BOI after 15 references")
+    for item_index in range(5):
+        boi_position = context_payload_end + item_index * tokenizer.tokens_per_item
+        if not np.all(completion_ids[:, boi_position] == TOKEN_LAYOUT.boi_token):
+            raise ValueError(
+                f"Evaluation completion target {item_index} is missing BOI")
     if not np.all(completion_ids[:, -1] == TOKEN_LAYOUT.eos_token):
         raise ValueError("Evaluation completion does not end in EOS")
 
@@ -264,6 +300,10 @@ def main() -> int:
         "--cue-dir", type=Path,
         default=SRC_ROOT / "02_creative_cues" / "outputs" / "production" / "latest")
     parser.add_argument("--prepared-dir", type=Path, required=True)
+    parser.add_argument(
+        "--active-cues", type=int, default=TOKEN_LAYOUT.cue_tokens,
+        choices=(0, 4, 8, 16),
+        help="Cue count used when this prepared dataset was built.")
     args = parser.parse_args()
 
     root = args.prepared_dir.expanduser().resolve()

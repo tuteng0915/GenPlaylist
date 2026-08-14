@@ -118,7 +118,7 @@ def _build_vectors(root: Path, dataset, tokenizer) -> dict:
         [tokenizer.semantic_tokens[item_id] for item_id in row_to_item], dtype=np.int16)
     stored_cues = np.asarray(
         [tokenizer.stored_item2cues[item_id] for item_id in row_to_item], dtype=np.int16)
-    active_cues = stored_cues[:, :TOKEN_LAYOUT.cue_tokens]
+    active_cues = stored_cues[:, :tokenizer.active_cues]
     rvq_reconstructed = np.stack([
         tokenizer._token_to_feature(tokens) for tokens in semantic
     ]).astype(np.float32)
@@ -160,7 +160,8 @@ def _build_vectors(root: Path, dataset, tokenizer) -> dict:
         for item_id in references:
             context.extend(tokenizer.encode_item(item_id))
         context.append(tokenizer.eos_token)
-        completed, completion_mask = tokenizer.build_next_item_completion(context)
+        completed, completion_mask = tokenizer.build_item_completion(
+            context, num_items=FROZEN_NEXT_SONG_PROTOCOL.eval_generated_items)
         ref_emb = catalog[ref_rows]
         mu_c = ref_emb.mean(axis=0, dtype=np.float32)
 
@@ -228,6 +229,10 @@ def main() -> int:
         default=SRC_ROOT / "02_creative_cues" / "outputs" / "production" / "latest")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
+        "--active-cues", type=int, default=TOKEN_LAYOUT.cue_tokens,
+        choices=(0, 4, 8, 16),
+        help="Ranked cues encoded per item; each value defines a separate model layout.")
+    parser.add_argument(
         "--allow-dirty", action="store_true",
         help="Allow generation from an uncommitted worktree (recorded in the manifest).")
     args = parser.parse_args()
@@ -259,6 +264,9 @@ def main() -> int:
         config.item2cues_path = str(cue_dir / "item2cues.json")
         config.cue_vocab_path = str(cue_dir / "cue_vocab.json")
         config.cue_manifest_path = str(cue_dir / "cue_manifest.json")
+        config.active_cue_tokens = args.active_cues
+        config.model.length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
+            1 + TOKEN_LAYOUT.rq_n_codebooks + 1 + args.active_cues)
         FROZEN_NEXT_SONG_PROTOCOL.validate_config(config)
 
         dataset = AbstractDataset(config)
@@ -285,10 +293,12 @@ def main() -> int:
             "protocol": {
                 "min_reference_items": FROZEN_NEXT_SONG_PROTOCOL.min_reference_items,
                 "train_total_items": FROZEN_NEXT_SONG_PROTOCOL.train_total_items,
+                "train_target_items": FROZEN_NEXT_SONG_PROTOCOL.train_target_items,
                 "eval_total_items": FROZEN_NEXT_SONG_PROTOCOL.eval_total_items,
                 "eval_reference_items": FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items,
                 "eval_target_items": FROZEN_NEXT_SONG_PROTOCOL.eval_target_items,
                 "eval_num_samples": FROZEN_NEXT_SONG_PROTOCOL.eval_num_samples,
+                "eval_generated_items": FROZEN_NEXT_SONG_PROTOCOL.eval_generated_items,
             },
             "token_layout": {
                 "tokens_per_item": tokenizer.tokens_per_item,

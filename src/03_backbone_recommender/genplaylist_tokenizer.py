@@ -19,6 +19,7 @@ sys.path.insert(0, str(_SRC))
 
 from shared.schema import (  # noqa: E402
     CLHE_EMB_DIM,
+    CUE_CANDIDATES_PER_ITEM,
     CUE_TOKENS,
     RQ_N_CODEBOOKS,
     CatalogItem,
@@ -40,7 +41,7 @@ class TokenizedPlaylist:
 
 
 class GenPlaylistTokenizer:
-    """Encode the 13-token item representation and decode one candidate."""
+    """Encode a configurable-cue item representation and decode candidates."""
 
     bos_token = 0
     boi_token = TOKEN_LAYOUT.boi_token
@@ -60,7 +61,15 @@ class GenPlaylistTokenizer:
         catalog_embeddings: np.ndarray,
         item_id_to_row: dict[str, int],
         codebook_weights: np.ndarray,
+        active_cues: int = CUE_TOKENS,
     ):
+        active_cues = int(active_cues)
+        if not 0 <= active_cues <= CUE_CANDIDATES_PER_ITEM:
+            raise ValueError(
+                f"active_cues must be in [0, {CUE_CANDIDATES_PER_ITEM}], "
+                f"got {active_cues}")
+        self.active_cues = active_cues
+        self.tokens_per_item = 1 + RQ_N_CODEBOOKS + 1 + active_cues
         self.semantic_tokens = {
             str(item_id): [int(token) for token in tokens]
             for item_id, tokens in semantic_tokens.items()
@@ -70,7 +79,7 @@ class GenPlaylistTokenizer:
             for item_id, cues in item2cues.items()
         }
         self.item2cues = {
-            item_id: cues[:CUE_TOKENS]
+            item_id: cues[:active_cues]
             for item_id, cues in self.stored_item2cues.items()
         }
         self.catalog_items = catalog_items
@@ -140,9 +149,9 @@ class GenPlaylistTokenizer:
             raise ValueError(
                 f"Cue schema {manifest.get('schema_version')!r} does not match "
                 f"{TOKEN_LAYOUT.schema_version!r}")
-        if active_cues != CUE_TOKENS:
+        if not 0 <= active_cues <= CUE_CANDIDATES_PER_ITEM:
             raise ValueError(
-                f"GenPlaylist-v1 token layout requires active_cues={CUE_TOKENS}, "
+                f"active_cues must be in [0, {CUE_CANDIDATES_PER_ITEM}], "
                 f"got {active_cues}")
         stored_cues = int(manifest.get(
             "stored_cues_per_item", manifest.get("cues_per_item", 0)))
@@ -150,11 +159,6 @@ class GenPlaylistTokenizer:
             raise ValueError(
                 f"Cue artifact stores {stored_cues} cues/item but WP-C needs the "
                 f"first {active_cues}")
-        manifest_active = int(manifest.get("default_active_cues", CUE_TOKENS))
-        if manifest_active != CUE_TOKENS:
-            raise ValueError(
-                f"Cue artifact default_active_cues={manifest_active} does not match "
-                f"the {CUE_TOKENS}-cue token layout")
         semantic_tokens = json.loads(Path(semantic_tokens_path).read_text(encoding="utf-8"))
         item2cues = json.loads(Path(item2cues_path).read_text(encoding="utf-8"))
         bad_lengths = {
@@ -170,7 +174,7 @@ class GenPlaylistTokenizer:
         weights = np.load(codebook_weights_path, allow_pickle=False)
         return cls(
             semantic_tokens, item2cues, catalog_items, catalog_embeddings,
-            item_id_to_row, weights)
+            item_id_to_row, weights, active_cues=active_cues)
 
     def _validate_artifacts(self) -> None:
         validate_catalog_alignment(
@@ -197,12 +201,12 @@ class GenPlaylistTokenizer:
         for item_id in catalog_ids:
             self._validated_semantic_tokens(item_id)
             stored_cues = self.stored_item2cues[item_id]
-            if len(stored_cues) < CUE_TOKENS:
+            if len(stored_cues) < self.active_cues:
                 raise ValueError(
                     f"Item {item_id} stores only {len(stored_cues)} cues; "
-                    f"at least {CUE_TOKENS} are required")
+                    f"at least {self.active_cues} are required")
             cues = self.item2cues[item_id]
-            if len(cues) != CUE_TOKENS or any(
+            if len(cues) != self.active_cues or any(
                 cue < 0 or cue >= TOKEN_LAYOUT.cue_vocab_size for cue in cues):
                 raise ValueError(f"Invalid cue IDs for item {item_id}: {cues}")
 
@@ -236,10 +240,10 @@ class GenPlaylistTokenizer:
         ids = [str(item_id) for item_id in item_ids]
         if len(ids) < 3:
             raise ValueError(
-                "Next-song training needs at least two reference items and one target item")
+                "Playlist completion needs at least two references and one target")
         if not 2 <= context_items < len(ids):
             raise ValueError(
-                "context_items must contain at least two references and leave a target item")
+                "context_items must contain at least two references and leave targets")
         if len(set(ids)) != len(ids):
             raise ValueError("Playlist item IDs must be unique")
 
@@ -269,10 +273,12 @@ class GenPlaylistTokenizer:
             sigma_c2=sigma_c2,
         )
 
-    def build_next_item_completion(
-        self, context_tokens: list[int] | np.ndarray,
+    def build_item_completion(
+        self, context_tokens: list[int] | np.ndarray, *, num_items: int,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Build ``references + [BOI, MASK x 12, EOS]`` for full-mask inference."""
+        """Append ``num_items`` joint full-MASK item slots to references."""
+        if num_items <= 0:
+            raise ValueError(f"num_items must be positive, got {num_items}")
         values = np.asarray(context_tokens, dtype=np.int64)
         if values.ndim != 1:
             raise ValueError(f"context_tokens must be 1-D, got {values.shape}")
@@ -288,23 +294,40 @@ class GenPlaylistTokenizer:
         if reference_width // self.tokens_per_item < 2:
             raise ValueError("Next-song completion requires at least two reference items")
 
+        reference_items = reference_width // self.tokens_per_item
+        if reference_items + num_items > self.max_items:
+            raise ValueError(
+                f"{reference_items} references + {num_items} targets exceed "
+                f"max_items={self.max_items}")
+
         payload_width = self.tokens_per_item - 1
-        completed = np.asarray([
-            *values[:-1],
-            self.boi_token,
-            *([self.mask_token_id] * payload_width),
-            self.eos_token,
-        ], dtype=np.int64)
+        target_tokens = []
+        for _ in range(num_items):
+            target_tokens.extend([
+                self.boi_token,
+                *([self.mask_token_id] * payload_width),
+            ])
+        completed = np.asarray(
+            [*values[:-1], *target_tokens, self.eos_token], dtype=np.int64)
         completion_mask = np.zeros(len(completed), dtype=bool)
-        payload_start = len(values)
-        completion_mask[payload_start:payload_start + payload_width] = True
+        first_target_boi = len(values) - 1
+        for target_index in range(num_items):
+            payload_start = (
+                first_target_boi + target_index * self.tokens_per_item + 1)
+            completion_mask[payload_start:payload_start + payload_width] = True
         return completed, completion_mask
+
+    def build_next_item_completion(
+        self, context_tokens: list[int] | np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Backward-compatible one-item completion used by the WP-D demo."""
+        return self.build_item_completion(context_tokens, num_items=1)
 
     def make_type_mask(self, seq_len: int) -> np.ndarray:
         """Return ``[seq_len, runtime_vocab]`` legal-token positions.
 
         The final position is reserved for EOS; every complete item payload
-        between BOS/EOS follows the 13-token stride. MASK is never a
+        between BOS/EOS follows the configured item stride. MASK is never a
         legal clean prediction.
         """
         if seq_len < 2 or (seq_len - 2) % self.tokens_per_item != 0:
@@ -410,15 +433,16 @@ class GenPlaylistTokenizer:
         return 1 + self.max_items * self.tokens_per_item + 1
 
     def tokenize(self, datasets: dict) -> dict:
-        """Tokenize next-one training rows and fixed 15->5 evaluation rows."""
+        """Tokenize fixed joint 15-reference/5-target train and test rows."""
         tokenized = {}
         for split, source in datasets.items():
-            usable = source.filter(lambda row: len(row["item_seq"]) >= 3)
+            protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
+            usable = source.filter(
+                lambda row: len(row["item_seq"]) == protocol.train_total_items)
 
             def encode_row(row):
                 item_ids = [str(item_id) for item_id in row["item_seq"]]
                 if split == "test":
-                    protocol = FROZEN_NEXT_SONG_PROTOCOL.validate_config(self.config)
                     reference_count = protocol.eval_reference_items
                     target_count = protocol.eval_target_items
                     expected_count = protocol.eval_total_items
@@ -428,15 +452,19 @@ class GenPlaylistTokenizer:
                             f"{reference_count}->{target_count} evaluation, got {len(item_ids)}")
                     reference_ids = item_ids[:reference_count]
                     target_ids = item_ids[reference_count:]
-                    # Reuse encode_playlist to compute the context statistics;
-                    # the temporary target is not exposed in test input_ids.
                     encoded = self.encode_playlist(
-                        [*reference_ids, target_ids[0]], context_items=reference_count)
+                        [*reference_ids, *target_ids], context_items=reference_count)
                 else:
-                    reference_ids = item_ids[:-1]
-                    target_ids = item_ids[-1:]
+                    reference_count = protocol.train_reference_items
+                    target_count = protocol.train_target_items
+                    if len(item_ids) != protocol.train_total_items:
+                        raise ValueError(
+                            f"Train rows must contain exactly {protocol.train_total_items} "
+                            f"items for {reference_count}->{target_count}, got {len(item_ids)}")
+                    reference_ids = item_ids[:reference_count]
+                    target_ids = item_ids[reference_count:]
                     encoded = self.encode_playlist(
-                        item_ids, context_items=len(reference_ids))
+                        item_ids, context_items=reference_count)
                 result = {
                     "input_ids": encoded.input_ids.tolist(),
                     "sequence_mask": [True] * len(encoded.input_ids),

@@ -124,7 +124,7 @@ def load_native_model(checkpoint_path: Path, data_dir: Path, device: str):
         raise ValueError(
             f"Unexpected checkpoint mismatch: missing={missing}, unexpected={unexpected}")
 
-    # The current runtime has three additional, unused conditioning parameters.
+    # The current runtime has three additional conditioning parameters.
     # Apply the legacy EMA shadows by the original shared parameter order rather
     # than passing them through the longer current EMA parameter list.
     named_parameters = dict(model.named_parameters())

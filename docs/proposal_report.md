@@ -1,5 +1,9 @@
 # GenPlaylist: Reference-Conditioned Next-Song Generation with DDBC
 
+> **Historical note.** This proposal predates the frozen personalized-generation
+> paper story. The current protocol and terminology are documented in
+> `WP_C_TRAIN_EVAL_PROTOCOL.md` and `design.md`.
+
 **Authors:** Anonymous | **Venue:** Under review | **Year:** 2025
 **Local PDF:** [main.pdf](../main.pdf)
 
@@ -7,7 +11,7 @@
 
 ## TL;DR
 
-GenPlaylist bridges next-item recommendation and music synthesis. Given multiple ordered reference tracks, it uses DDBC to predict exactly one next-item latent while conditioning on the references' semantic centroid and dispersion. An LLM verbalizes that latent into attributes and lyrics, and ACE-Step synthesizes one original next song. The output is generated music rather than a retrieved catalog item.
+GenPlaylist bridges playlist continuation and music synthesis. Given 15 ordered reference tracks, DDBC jointly predicts a five-item latent continuation conditioned on the visible history. The unchanged WP-D demo consumes one selected latent plan for LLM verbalization and ACE-Step synthesis; the selection policy and joint multi-song synthesis remain outside the frozen demo scope.
 
 ---
 
@@ -25,10 +29,10 @@ GenPlaylist bridges next-item recommendation and music synthesis. Given multiple
 Four-stage pipeline:
 
 ```
-Ordered references C = (m1, ..., mt), t ≥ 2
+Ordered references C = (m1, ..., m15)
   → [§4.1] CLHE encode → compute μ_C, σ²_C
   → [§4.2] RVQ discretize → token matrix Z^(0) ∈ N^(|C|×L)
-  → [§4.3] DDBC masked diffusion → one next-item latent ẑ_(t+1)
+  → [§4.3] DDBC masked diffusion → five joint continuation latents ẑ_(t+1:t+5)
   → [§4.4] Latent verbalization (top-k lookup + LLM) → lyrics L, attributes A
   → [§4.5] ACE-Step synthesis → one next-song audio track
 ```
@@ -43,17 +47,17 @@ A valid next song should be compatible with the reference structure while remain
 
 **RVQ** (§4.2): Each continuous embedding E(m) ∈ ℝ^d is discretized into an L-level code tuple z(m) = (z_{m,1}, …, z_{m,L}) via residual vector quantization. Codebooks are trained with the encoder. This is identical to the DDBC tokenization.
 
-**Dispersion-conditioned masked discrete diffusion** (§4.3): The DDBC absorbing-mask process corrupts only the single next-item payload. At inference the system appends `[BOI, MASK×12, EOS]` and jointly denoises those twelve positions; it does not autoregressively append multiple blocks. The bidirectional DiT conditions on projected σ²_C and μ_C through AdaLN, while reference tokens remain fixed.
+**Dispersion-conditioned masked discrete diffusion** (§4.3): The DDBC absorbing-mask process corrupts only the five continuation payloads. At inference the system appends five `[BOI, MASK×12]` blocks plus EOS and jointly denoises all 60 payload positions. The bidirectional DiT conditions on projected σ²_C and μ_C through AdaLN, while reference tokens remain fixed.
 
-**Latent verbalization** (§4.4): Find top-k catalog neighbors of the single predicted latent by cosine similarity in CLHE space. The prompt includes the actual ordered references, target-latent neighbors, creative cues, and a reference-centroid style summary.
+**Latent verbalization** (§4.4): The unchanged WP-D boundary consumes one selected latent and finds its top-k catalog neighbors by cosine similarity in CLHE space. Choosing that latent from the five-item WP-C result is a separate, not-yet-frozen policy. The prompt includes the actual ordered references, target-latent neighbors, creative cues, and a reference-centroid style summary.
 
 **Lyric & attribute generation** (§4.5): The LLM produces one attribute set A = {genre, mood, tempo, instrumentation, key, language} and one lyric draft L following ACE-Step markup. ACE-Step then synthesizes the next-song audio.
 
 **Frozen training/evaluation protocol:** Training expands every chronological
-playlist prefix into at most 15 references and one next-item target. Evaluation
+playlist into all rolling windows of 15 references and five continuation targets. Evaluation
 keeps the first 20 songs of every eligible test playlist, uses songs 1–15 as
-references and songs 16–20 as five ground-truth futures, then independently
-samples the next-one DDBC slot five times. The two five-item sets are compared
+references and songs 16–20 as five ground-truth futures, then jointly samples
+five DDBC item slots once. The two five-item sets are compared
 with full-catalog retrieval and order-free Hungarian matching. Samples are not
 autoregressively fed back. The WP-D demo remains singular and is not changed by
 this offline protocol.
@@ -64,8 +68,8 @@ this offline protocol.
 
 ### Figure 1 — Full Pipeline Overview
 ![Fig 3](fig_3-3.png)
-**What it shows:** End-to-end flow from multiple references + optional instruction through DDBC next-item prediction, latent verbalization, and one-song synthesis.
-**Key insight:** The research question is whether a DDBC next-item latent can serve as a useful semantic plan for generating the next song rather than retrieving it.
+**What it shows:** End-to-end flow from 15 references + optional instruction through DDBC joint continuation prediction, selection of one latent for verbalization, and one-song synthesis.
+**Key insight:** The research question is whether a DDBC joint continuation can provide coherent semantic plans for music generation rather than only catalog retrieval.
 
 ### Figure — Dispersion Conditioning & Evaluation Setup
 ![Fig 4](fig_4-4.png)
@@ -123,4 +127,4 @@ Distance CD↓ as structural analyses.
 
 ## One-line Takeaway
 
-> GenPlaylist uses DDBC to plan one next-item latent from multiple references, then turns that plan into one original song through verbalization and audio synthesis.
+> GenPlaylist uses DDBC to jointly plan five continuation latents from 15 references; the current demo turns one selected plan into an original song.

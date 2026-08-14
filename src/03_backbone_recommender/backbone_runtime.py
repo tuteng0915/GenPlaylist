@@ -134,14 +134,16 @@ def run_backbone(
     mu_batch = torch.from_numpy(mu_c)[None, :].repeat(n_samples, 1).to(device)
     sigma_batch = torch.full(
         (n_samples,), float(sigma_c2), dtype=torch.float32, device=device)
+    structure_conditioning = getattr(
+        model.config.sampling, "structure_conditioning", False)
 
     steps = int(model.config.sampling.steps)
     generated = model.restore_model_and_sample_next_item(
         input_ids=input_ids,
         num_steps=steps,
         context_emb=mu_batch,
-        mu_c=mu_batch,
-        sigma_c2=sigma_batch,
+        mu_c=mu_batch if structure_conditioning else None,
+        sigma_c2=sigma_batch if structure_conditioning else None,
     )
     generated_sequences = generated.detach().cpu().numpy()
     expected_shape = (n_samples, 2 + tokenizer.tokens_per_item)

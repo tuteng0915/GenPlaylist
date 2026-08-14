@@ -33,8 +33,8 @@ sampling:
   # TODO(yair): @subham, why aren't these params under `eval`?
   num_sample_batches: 2  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
   num_sample_log: 2
-  # Legacy unconditional sample_eval controls. Production next-song inference
-  # uses explicit full-mask completion and ignores these three fields.
+  # Legacy unconditional sample_eval controls. WP-C evaluation uses explicit
+  # joint full-mask completion and ignores these three fields.
   semi_ar: False
   stride_length: 15
   num_strides: 1
@@ -42,7 +42,7 @@ sampling:
   cfg_encoder: false  # true = 用 Transformer encoder 编码 context（false = mean-pool）
   cfg_p_drop: 0.1     # 训练时 context dropout 概率
   cfg_w: 2.0          # 推理 guidance scale（1.0=仅 conditioned，>1=放大）
-  structure_conditioning: true  # condition AdaLN on playlist centroid + dispersion
+  structure_conditioning: false  # retained only for legacy-checkpoint compatibility
 
 training:
   ema: 0.9999
@@ -55,12 +55,24 @@ training:
   # Layer 0 (d0) 决定粗粒度类别，最重要；conflict digit 很少被真正使用，权重最低
   # rvq_weights: 各 RVQ 层的权重列表 [d0, d1, d2, ...]，若长度不足则用最后一个值补充
   # conflict_weight: conflict digit 的权重
-  # 权重不做归一化，总 loss 量级会随权重均值变化，建议保持权重均值在 1.0 附近
+  # 开启 normalize 后，位置权重会归一化到 target token 平均权重为 1，
+  # 因而 curriculum 不会改变总 loss 尺度或等效学习率。
   layer_loss_weights:
-    enabled: false
+    enabled: true
+    normalize: true
     rvq_weights: [2.0, 1.5, 1.0]
     conflict_weight: 0.5
     cue_weight: 1.0
+    # Full GenPlaylist uses this curriculum. Set enabled=false for the uniform-loss ablation.
+    # 前 1000 steps
+    # 固定使用 initial_*，随后在 1000--5000 steps 线性插值到上面的最终值。
+    warmup:
+      enabled: true
+      start_step: 1000
+      end_step: 5000
+      initial_rvq_weights: [2.0, 1.5, 1.0]
+      initial_conflict_weight: 0.5
+      initial_cue_weight: 0.1
 
 eval:
   checkpoint_path: ''  # Used to evaluate a checkpoint after training.
@@ -77,9 +89,8 @@ eval:
   compute_perplexity_on_sanity: False
   gen_ppl_eval_model_name_or_path: gpt2-large  # gpt2-large, meta-llama/Llama-2-7b-hf
   generate_samples: True
-  # Inference is always next-one; rec_eval repeats it according to
-  # protocol.eval_num_samples and matches the draws to five future songs.
-  predict_num_items: 1
+  # WP-C evaluates one jointly generated five-item continuation.
+  predict_num_items: 5
 
 optim:
   weight_decay: 0
@@ -137,6 +148,7 @@ evaluator:
   candidate_multiplier: 99  # 候选集大小 = label_items数量 × multiplier（默认99，总共100倍）
   allow_duplicate_items: false  # 是否允许预测重复item（false=bundle模式，true=sequence模式） 
   num_samples: ${protocol.eval_num_samples}
+  generated_items: ${protocol.eval_generated_items}
 
 dataset: spotify
 # Canonical data/dataset is resolved from the repository root when null.  Set
@@ -151,22 +163,24 @@ cue_vocab_path: null
 cue_manifest_path: null
 # Optional offline cache produced by scripts/prepare_wp_c_data.py.
 prepared_dataset_path: null
-# WP-B stores 16 ranked candidates per song; the v1 token layout consumes the
-# first 8. Changing this requires a new token layout and a separately trained model.
+# WP-B stores 16 ranked candidates per song. The main model consumes the first
+# 8; 0/4/16 are separate layouts and require separately prepared data and training.
 active_cue_tokens: 8
 feature_type: clhe
 sent_emb_pca: -1
-# Training windows contain at most 15 references plus one next-item target.
-seq_len: 16
+# Training windows contain exactly 15 references plus five continuation targets.
+seq_len: 20
 cir: 1
 swap_ratio: 0.0
 
 protocol:
-  min_reference_items: 2
+  min_reference_items: 15
+  train_target_items: 5
   eval_total_items: 20
   eval_reference_items: 15
   eval_target_items: 5
-  eval_num_samples: 5
+  eval_num_samples: 1
+  eval_generated_items: 5
 
 num_proc: 1
 eval_batch_size: 32

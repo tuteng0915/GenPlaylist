@@ -430,7 +430,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
                                       vocab_size,config)
     self.sigma_map = TimestepEmbedder(config.model.cond_dim)
     # Playlist structure is a first-class condition, not reconstructed from a
-    # sparse integer item ID.  Zero biases make zero-valued conditions neutral.
+    # sparse integer item ID. Zero biases make zero-valued conditions neutral.
     context_dim = int(config.model.get('context_dim', 64))
     self.context_dim = context_dim
     self.mu_c_map = nn.Linear(context_dim, config.model.cond_dim, bias=False)

@@ -334,7 +334,7 @@ class Diffusion(L.LightningModule):
   def forward(
       self, x, sigma, context_emb=None, mu_c=None, sigma_c2=None,
       sequence_mask=None):
-    """Returns log score."""
+    """Return log scores conditioned on visible tokens and playlist statistics."""
     sigma = self._process_sigma(sigma)
     with torch.cuda.amp.autocast(dtype=torch.float32): # la
       logits = self.backbone(
@@ -409,7 +409,7 @@ class Diffusion(L.LightningModule):
       'sequence_mask', torch.ones_like(batch['input_ids'], dtype=torch.bool))
     mu_c = batch.get('mu_c', None)
     sigma_c2 = batch.get('sigma_c2', None)
-    if not getattr(self.config.sampling, 'structure_conditioning', True):
+    if not getattr(self.config.sampling, 'structure_conditioning', False):
       mu_c = None
       sigma_c2 = None
     if mu_c is not None:
@@ -446,6 +446,22 @@ class Diffusion(L.LightningModule):
         on_step=(prefix == 'train'),
         on_epoch=True,
         sync_dist=True)
+
+    layer_weights_cfg = getattr(self.config.training, 'layer_loss_weights', None)
+    if (prefix == 'train' and layer_weights_cfg is not None
+        and layer_weights_cfg.get('enabled', False)):
+      rvq_weights, conflict_weight, cue_weight = (
+        self._current_layer_loss_weights())
+      weight_logs = {
+        f'train/loss_weight_d{index}': value
+        for index, value in enumerate(rvq_weights)
+      }
+      weight_logs.update({
+        'train/loss_weight_conflict': conflict_weight,
+        'train/loss_weight_cues': cue_weight,
+      })
+      self.log_dict(
+        weight_logs, on_step=True, on_epoch=False, sync_dist=True)
 
     return loss
 
@@ -1127,11 +1143,75 @@ class Diffusion(L.LightningModule):
     new_attention_mask = attention_mask
     return input_tokens, output_tokens, new_attention_mask
 
-  def _compute_position_weights(self, x0):
+  def _current_layer_loss_weights(self, global_step=None):
+    """Resolve RVQ/conflict/cue weights at one curriculum step."""
+    weight_cfg = self.config.training.layer_loss_weights
+    n_codebooks = self.tokenizer.n_digit
+
+    def expanded(values, name):
+      output = [float(value) for value in values]
+      if not output:
+        raise ValueError(f'{name} must contain at least one weight')
+      while len(output) < n_codebooks:
+        output.append(output[-1])
+      output = output[:n_codebooks]
+      if any(value < 0 for value in output):
+        raise ValueError(f'{name} must be non-negative, got {output}')
+      return output
+
+    final_rvq = expanded(weight_cfg.rvq_weights, 'rvq_weights')
+    final_conflict = float(weight_cfg.conflict_weight)
+    final_cue = float(weight_cfg.get('cue_weight', 1.0))
+    if final_conflict < 0 or final_cue < 0:
+      raise ValueError('conflict_weight and cue_weight must be non-negative')
+    if sum(final_rvq) + final_conflict + final_cue <= 0:
+      raise ValueError('Final layer-loss weights cannot all be zero')
+
+    warmup = weight_cfg.get('warmup', None)
+    if warmup is None or not warmup.get('enabled', False):
+      return final_rvq, final_conflict, final_cue
+
+    start_step = int(warmup.start_step)
+    end_step = int(warmup.end_step)
+    if start_step < 0 or end_step <= start_step:
+      raise ValueError(
+        f'Invalid layer-loss warmup interval: {start_step}..{end_step}')
+    initial_rvq = expanded(
+      warmup.initial_rvq_weights, 'warmup.initial_rvq_weights')
+    initial_conflict = float(warmup.initial_conflict_weight)
+    initial_cue = float(warmup.initial_cue_weight)
+    if initial_conflict < 0 or initial_cue < 0:
+      raise ValueError('Initial conflict/cue weights must be non-negative')
+    if sum(initial_rvq) + initial_conflict + initial_cue <= 0:
+      raise ValueError('Initial layer-loss weights cannot all be zero')
+
+    if global_step is None:
+      try:
+        global_step = int(self.global_step)
+      except (AttributeError, RuntimeError):
+        global_step = 0
+    step = int(global_step)
+    progress = min(
+      max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+
+    def interpolate(initial, final):
+      return initial + progress * (final - initial)
+
+    rvq = [
+      interpolate(initial, final)
+      for initial, final in zip(initial_rvq, final_rvq)
+    ]
+    return (
+      rvq,
+      interpolate(initial_conflict, final_conflict),
+      interpolate(initial_cue, final_cue),
+    )
+
+  def _compute_position_weights(self, x0, global_step=None):
     """
     为序列每个 token 位置计算 loss 权重，根据其在 item 内的角色。
 
-    Token 结构（GenPlaylist v1）：
+    Token 结构（GenPlaylist v3）：
       [BOS, BOI, d0, d1, d2, conflict, c0, c1, c2, c3, c4, c5, c6, c7, ..., EOS]
       period = tokenizer.tokens_per_item = 13
 
@@ -1145,17 +1225,10 @@ class Diffusion(L.LightningModule):
 
     返回 shape: [batch, seq_len]，数值类型 float，设备与 x0 一致。
     """
-    weight_cfg = self.config.training.layer_loss_weights
     n_codebooks = self.tokenizer.n_digit
     period = self.tokenizer.tokens_per_item
-
-    rvq_weights = list(weight_cfg.rvq_weights)
-    conflict_weight = float(weight_cfg.conflict_weight)
-    cue_weight = float(weight_cfg.get('cue_weight', 1.0))
-
-    # 若 rvq_weights 长度不足 n_codebooks，用最后一个值补充
-    while len(rvq_weights) < n_codebooks:
-      rvq_weights.append(rvq_weights[-1])
+    rvq_weights, conflict_weight, cue_weight = (
+      self._current_layer_loss_weights(global_step=global_step))
 
     weights = torch.ones(x0.shape, dtype=torch.float, device=x0.device)
     seq_len = x0.shape[1]
@@ -1173,6 +1246,14 @@ class Diffusion(L.LightningModule):
 
     return weights
 
+  @staticmethod
+  def _normalize_active_position_weights(pos_weights, effective_mask):
+    """Keep the mean active target weight at one throughout curriculum."""
+    active_weight_sum = (
+      pos_weights * effective_mask).sum().clamp_min(1e-12)
+    active_token_count = effective_mask.sum().clamp_min(1)
+    return pos_weights * (active_token_count / active_weight_sum)
+
   def _compute_layer_nll_stats(self, x0, unweighted_nlls, target_mask=None):
     """
     按 token 类型（d0/d1/.../conflict）分别统计平均未加权 NLL。
@@ -1180,7 +1261,7 @@ class Diffusion(L.LightningModule):
     参数：
       x0: [batch, seq_len]  原始 token 序列（用于定位各层 token 位置）
       unweighted_nlls: [batch, seq_len]  未加权的 per-token loss
-      target_mask: [batch, seq_len]  只统计 next-item payload；None 仅用于兼容
+      target_mask: [batch, seq_len]  只统计 target payload；None 仅用于兼容
 
     返回：
       dict，key 为 'layer_nll/d{i}' 和 'layer_nll/conflict'，value 为标量 tensor
@@ -1324,6 +1405,9 @@ class Diffusion(L.LightningModule):
     layer_weights_cfg = getattr(self.config.training, 'layer_loss_weights', None)
     if layer_weights_cfg is not None and layer_weights_cfg.get('enabled', False):
       pos_weights = self._compute_position_weights(input_tokens)
+      if layer_weights_cfg.get('normalize', True):
+        pos_weights = self._normalize_active_position_weights(
+          pos_weights, effective_mask)
       nlls = nlls * pos_weights
 
     count = effective_mask.sum().clamp_min(1)
@@ -1373,11 +1457,11 @@ class Diffusion(L.LightningModule):
     entropy[masked_indices] += pos_term - neg_term + const
     return entropy
 
-  def build_next_item_completion(self, context_ids, sequence_mask=None):
-    """Append one explicit full-MASK item slot to a reference sequence batch.
+  def build_item_completion(self, context_ids, num_items, sequence_mask=None):
+    """Append explicit joint full-MASK item slots to a reference batch.
 
     Input rows are right-padded ``[BOS, reference items..., EOS]`` sequences.
-    Output rows are ``[BOS, references..., BOI, MASK x payload, EOS, padding]``.
+    Output rows are ``[BOS, references..., (BOI, MASK x payload) x N, EOS]``.
     Only payload positions are marked in ``completion_mask``; references, BOI,
     EOS, and padding are immutable during reverse diffusion.
     """
@@ -1410,8 +1494,8 @@ class Diffusion(L.LightningModule):
       if length < 2 or not bool(sequence_mask[row, :length].all()) or bool(
           sequence_mask[row, length:].any()):
         raise ValueError(f'Context row {row} must use contiguous right padding')
-      completed_row, completion_row = self.tokenizer.build_next_item_completion(
-        context_ids[row, :length].detach().cpu().numpy())
+      completed_row, completion_row = self.tokenizer.build_item_completion(
+        context_ids[row, :length].detach().cpu().numpy(), num_items=num_items)
       prepared_rows.append((completed_row, completion_row))
 
     output_length = max(len(completed_row) for completed_row, _ in prepared_rows)
@@ -1435,6 +1519,11 @@ class Diffusion(L.LightningModule):
       completed_sequence_mask[row, :row_length] = True
 
     return completed, completion_mask, completed_sequence_mask
+
+  def build_next_item_completion(self, context_ids, sequence_mask=None):
+    """Backward-compatible one-item completion used by the WP-D runtime."""
+    return self.build_item_completion(
+      context_ids, num_items=1, sequence_mask=sequence_mask)
 
 
   @torch.no_grad()
@@ -1491,7 +1580,7 @@ class Diffusion(L.LightningModule):
     cfg_enabled = getattr(self.config.sampling, 'cfg_enabled', False)
     if not cfg_enabled:
       context_emb = None
-    if not getattr(self.config.sampling, 'structure_conditioning', True):
+    if not getattr(self.config.sampling, 'structure_conditioning', False):
       mu_c = None
       sigma_c2 = None
     cfg_w = getattr(self.config.sampling, 'cfg_w', 1.0)
@@ -1547,12 +1636,13 @@ class Diffusion(L.LightningModule):
     return x
 
 
-  def extract_next_item_completion(self, completed_ids, completion_mask):
-    """Extract ``[BOS, BOI, payload, EOS]`` from completed full sequences."""
+  def extract_item_completion(self, completed_ids, completion_mask, num_items):
+    """Extract ``[BOS, (BOI, payload) x N, EOS]`` from completed sequences."""
     if completed_ids.shape != completion_mask.shape:
       raise ValueError('completed_ids and completion_mask shapes differ')
     rows = []
-    expected_payload = self.tokenizer.tokens_per_item - 1
+    payload_width = self.tokenizer.tokens_per_item - 1
+    expected_payload = num_items * payload_width
     for row in range(completed_ids.shape[0]):
       positions = torch.nonzero(completion_mask[row], as_tuple=False).flatten()
       if positions.numel() != expected_payload:
@@ -1560,17 +1650,27 @@ class Diffusion(L.LightningModule):
           f'Row {row} has {positions.numel()} payload positions; '
           f'expected {expected_payload}')
       start = int(positions[0].item())
-      expected = torch.arange(
-        start, start + expected_payload, device=positions.device)
+      expected_groups = []
+      for item_index in range(num_items):
+        group_start = start + item_index * self.tokenizer.tokens_per_item
+        expected_groups.append(torch.arange(
+          group_start, group_start + payload_width, device=positions.device))
+      expected = torch.cat(expected_groups)
       if not torch.equal(positions, expected):
-        raise ValueError(f'Row {row} completion positions are not contiguous')
-      item_with_boundaries = completed_ids[
-        row, start - 1:start + expected_payload + 1]
+        raise ValueError(f'Row {row} completion positions do not form {num_items} items')
+      sequence_start = start - 1
+      sequence_end = sequence_start + num_items * self.tokenizer.tokens_per_item + 1
+      items_with_boundaries = completed_ids[row, sequence_start:sequence_end]
       bos = torch.as_tensor(
         [self.tokenizer.bos_token], dtype=completed_ids.dtype,
         device=completed_ids.device)
-      rows.append(torch.cat((bos, item_with_boundaries)))
+      rows.append(torch.cat((bos, items_with_boundaries)))
     return torch.stack(rows)
+
+  def extract_next_item_completion(self, completed_ids, completion_mask):
+    """Backward-compatible one-item extraction used by the WP-D runtime."""
+    return self.extract_item_completion(
+      completed_ids, completion_mask, num_items=1)
 
 
   @torch.no_grad
@@ -1593,7 +1693,7 @@ class Diffusion(L.LightningModule):
     context_emb = prepare_condition(context_emb)
     mu_c = prepare_condition(mu_c)
     sigma_c2 = prepare_condition(sigma_c2)
-    if not getattr(self.config.sampling, 'structure_conditioning', True):
+    if not getattr(self.config.sampling, 'structure_conditioning', False):
       mu_c = None
       sigma_c2 = None
 
@@ -1634,8 +1734,8 @@ class Diffusion(L.LightningModule):
             # Two-pass CFG: geometric interpolation in log-prob space
             log_p_cond = self.forward(
               x, sigma_t, context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2)
-            # CFG drops only the optional prefix encoder; playlist structure is
-            # retained because training does not drop mu_c/sigma_c2.
+            # CFG drops only the optional prefix encoder. Any explicitly enabled
+            # legacy structure condition is shared by both passes.
             log_p_uncond = self.forward(
               x, sigma_t, context_emb=None, mu_c=mu_c, sigma_c2=sigma_c2)
             log_p_guided = log_p_uncond + cfg_w * (log_p_cond - log_p_uncond)
@@ -1734,7 +1834,16 @@ class Diffusion(L.LightningModule):
   def restore_model_and_sample_next_item(
       self, input_ids, num_steps, eps=1e-5, context_emb=None,
       mu_c=None, sigma_c2=None, sequence_mask=None):
-    """Generate one item by full-MASK completion, without next-block sampling."""
+    """Generate one item by full-MASK completion for the WP-D demo."""
+    return self.restore_model_and_sample_items(
+      input_ids=input_ids, num_items=1, num_steps=num_steps, eps=eps,
+      context_emb=context_emb, mu_c=mu_c, sigma_c2=sigma_c2,
+      sequence_mask=sequence_mask)
+
+  def restore_model_and_sample_items(
+      self, input_ids, num_items, num_steps, eps=1e-5, context_emb=None,
+      mu_c=None, sigma_c2=None, sequence_mask=None):
+    """Jointly generate ``num_items`` full-MASK item slots."""
     backbone_was_training = self.backbone.training
     noise_was_training = self.noise.training
     if self.ema:
@@ -1746,7 +1855,8 @@ class Diffusion(L.LightningModule):
     self.noise.eval()
     try:
       masked_ids, completion_mask, completed_sequence_mask = (
-        self.build_next_item_completion(input_ids, sequence_mask=sequence_mask))
+        self.build_item_completion(
+          input_ids, num_items=num_items, sequence_mask=sequence_mask))
       completed_ids = self.sample_masked_completion(
         masked_ids=masked_ids,
         completion_mask=completion_mask,
@@ -1756,7 +1866,8 @@ class Diffusion(L.LightningModule):
         mu_c=mu_c,
         sigma_c2=sigma_c2,
         sequence_mask=completed_sequence_mask)
-      return self.extract_next_item_completion(completed_ids, completion_mask)
+      return self.extract_item_completion(
+        completed_ids, completion_mask, num_items=num_items)
     finally:
       if self.ema:
         self.ema.restore(itertools.chain(

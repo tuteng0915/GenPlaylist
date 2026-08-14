@@ -19,7 +19,7 @@ GenPlaylistTokenizer = module.GenPlaylistTokenizer
 from shared.schema import CatalogItem, TOKEN_LAYOUT  # noqa: E402
 
 
-def make_tokenizer():
+def make_tokenizer(active_cues=8):
     items = [CatalogItem("18996"), CatalogItem("48262"), CatalogItem("73001")]
     semantic = {
         "18996": [1, 257, 513, 769],
@@ -39,7 +39,8 @@ def make_tokenizer():
     weights = np.arange(768 * 64, dtype=np.float32).reshape(768, 64)
     return GenPlaylistTokenizer(
         semantic, cues, items, embeddings,
-        {"18996": 0, "48262": 1, "73001": 2}, weights)
+        {"18996": 0, "48262": 1, "73001": 2}, weights,
+        active_cues=active_cues)
 
 
 def make_twenty_item_tokenizer():
@@ -59,12 +60,18 @@ def make_twenty_item_tokenizer():
         semantic, cues, items, embeddings,
         {item_id: index for index, item_id in enumerate(item_ids)}, weights)
     tokenizer.config = {
+        "seq_len": 20,
         "rq_codebook_size": 256,
         "protocol": {
+            "min_reference_items": 15,
+            "train_target_items": 5,
             "eval_reference_items": 15,
             "eval_target_items": 5,
+            "eval_num_samples": 1,
+            "eval_generated_items": 5,
         },
     }
+    tokenizer.max_items = 20
     return tokenizer, item_ids
 
 
@@ -138,7 +145,7 @@ def test_type_mask_matches_stride():
     assert np.flatnonzero(legal[-1]).tolist() == [TOKEN_LAYOUT.eos_token]
 
 
-def test_file_contract_loads_sixteen_and_activates_first_eight():
+def test_file_contract_loads_sixteen_and_supports_configured_prefixes():
     source = make_tokenizer()
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -153,17 +160,31 @@ def test_file_contract_loads_sixteen_and_activates_first_eight():
             "default_active_cues": 8,
         }), encoding="utf-8")
         np.save(root / "weights.npy", source.codebook_weights)
-        loaded = GenPlaylistTokenizer.from_files(
-            semantic_tokens_path=root / "semantic.json",
-            item2cues_path=root / "item2cues.json",
-            cue_manifest_path=root / "manifest.json",
-            catalog_items=source.catalog_items,
-            catalog_embeddings=source.catalog_embeddings,
-            item_id_to_row=source.item_id_to_row,
-            codebook_weights_path=root / "weights.npy",
-        )
-        assert len(loaded.stored_item2cues["18996"]) == 16
-        assert loaded.item2cues["18996"] == list(range(8))
+        for active_cues in (0, 4, 8, 16):
+            loaded = GenPlaylistTokenizer.from_files(
+                semantic_tokens_path=root / "semantic.json",
+                item2cues_path=root / "item2cues.json",
+                cue_manifest_path=root / "manifest.json",
+                catalog_items=source.catalog_items,
+                catalog_embeddings=source.catalog_embeddings,
+                item_id_to_row=source.item_id_to_row,
+                codebook_weights_path=root / "weights.npy",
+                active_cues=active_cues,
+            )
+            assert len(loaded.stored_item2cues["18996"]) == 16
+            assert loaded.item2cues["18996"] == list(range(active_cues))
+
+
+def test_configurable_cue_layouts_require_separate_strides():
+    for active_cues in (0, 4, 8, 16):
+        tokenizer = make_tokenizer(active_cues=active_cues)
+        assert tokenizer.active_cues == active_cues
+        assert tokenizer.tokens_per_item == 5 + active_cues
+        assert len(tokenizer.encode_item("18996")) == 5 + active_cues
+        generated = tokenizer.decode_item(
+            tokenizer.encode_item("18996"),
+            mu_c=np.zeros(64, dtype=np.float32), sigma_c2=0.0)
+        assert len(generated.cue_ids) == active_cues
 
 
 def test_builds_explicit_full_mask_next_item_slot():
@@ -178,6 +199,25 @@ def test_builds_explicit_full_mask_next_item_slot():
     assert completed[len(context) - 1] == tokenizer.boi_token
     assert completion_mask.sum() == tokenizer.tokens_per_item - 1
     assert np.all(completed[completion_mask] == tokenizer.mask_token_id)
+    assert completed[-1] == tokenizer.eos_token
+
+
+def test_builds_joint_five_item_full_mask_completion():
+    tokenizer, item_ids = make_twenty_item_tokenizer()
+    context = [tokenizer.bos_token]
+    for item_id in item_ids[:15]:
+        context.extend(tokenizer.encode_item(item_id))
+    context.append(tokenizer.eos_token)
+    completed, completion_mask = tokenizer.build_item_completion(
+        context, num_items=5)
+
+    assert len(completed) == 2 + 20 * tokenizer.tokens_per_item
+    assert completion_mask.sum() == 5 * (tokenizer.tokens_per_item - 1)
+    assert np.all(completed[completion_mask] == tokenizer.mask_token_id)
+    target_start = 1 + 15 * tokenizer.tokens_per_item
+    for item_index in range(5):
+        assert completed[target_start + item_index * tokenizer.tokens_per_item] == (
+            tokenizer.boi_token)
     assert completed[-1] == tokenizer.eos_token
 
 
@@ -217,6 +257,19 @@ def test_test_tokenization_exposes_fifteen_references_and_five_labels():
     assert row["labels"][0] == tokenizer.semantic_tokens[item_ids[15]]
     assert row["labels"][-1] == tokenizer.semantic_tokens[item_ids[19]]
     assert np.allclose(row["mu_c"], 7.0)
+
+
+def test_train_tokenization_scores_all_five_target_payloads():
+    tokenizer, item_ids = make_twenty_item_tokenizer()
+    source = FakeRows([{"bundle": "p", "item_seq": item_ids}])
+    row = tokenizer.tokenize({"train": source})["train"][0]
+
+    assert len(row["input_ids"]) == 2 + 20 * tokenizer.tokens_per_item
+    assert sum(row["target_mask"]) == 5 * (tokenizer.tokens_per_item - 1)
+    first_target = 1 + 15 * tokenizer.tokens_per_item
+    assert not row["target_mask"][first_target]
+    assert all(
+        row["target_mask"][first_target + 1:first_target + tokenizer.tokens_per_item])
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ sys.path.insert(0, str(SRC_ROOT))
 sys.path.insert(0, str(WP_ROOT))
 
 from shared.schema import CatalogItem, TOKEN_LAYOUT  # noqa: E402
+from shared.protocol import FROZEN_NEXT_SONG_PROTOCOL  # noqa: E402
 
 
 def main() -> int:
@@ -32,7 +33,7 @@ def main() -> int:
         default=SRC_ROOT / "02_creative_cues" / "outputs" / "production" / "latest")
     parser.add_argument(
         "--backward-smoke", action="store_true",
-        help="also run one target-only diffusion loss and CPU backward pass")
+        help="also run one joint-five-target diffusion loss and CPU backward pass")
     args = parser.parse_args()
 
     import hydra
@@ -83,8 +84,10 @@ def main() -> int:
     print(json.dumps(report, indent=2))
     print("[warmstart] official DDBC weights are compatible via semantic remapping")
     if args.backward_smoke:
-        item_ids = [item.item_id for item in items[:3]]
-        encoded = tokenizer.encode_playlist(item_ids, context_items=2)
+        item_ids = [
+            item.item_id for item in items[:FROZEN_NEXT_SONG_PROTOCOL.train_total_items]]
+        encoded = tokenizer.encode_playlist(
+            item_ids, context_items=FROZEN_NEXT_SONG_PROTOCOL.train_reference_items)
         example = {
             "input_ids": encoded.input_ids.tolist(),
             "attention_mask": encoded.attention_mask.tolist(),

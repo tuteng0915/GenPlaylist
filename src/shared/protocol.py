@@ -1,4 +1,4 @@
-"""Frozen cross-WP next-song training and evaluation protocol."""
+"""Frozen cross-WP joint five-song continuation protocol."""
 
 from __future__ import annotations
 
@@ -8,31 +8,37 @@ from typing import Mapping, Sequence
 
 @dataclass(frozen=True)
 class NextSongProtocol:
-    """Single source of truth for the GenPlaylist-v1 experiment split."""
+    """Single source of truth for the GenPlaylist joint-5 experiment split."""
 
-    min_reference_items: int = 2
-    train_total_items: int = 16
+    min_reference_items: int = 15
+    train_total_items: int = 20
+    train_target_items: int = 5
     eval_total_items: int = 20
     eval_reference_items: int = 15
     eval_target_items: int = 5
-    eval_num_samples: int = 5
+    eval_num_samples: int = 1
+    eval_generated_items: int = 5
 
     @property
     def train_reference_items(self) -> int:
-        return self.train_total_items - 1
+        return self.train_total_items - self.train_target_items
 
-    def model_token_length(self, tokens_per_item: int) -> int:
-        return 2 + self.train_total_items * int(tokens_per_item)
+    def model_token_length(self, tokens_per_item: int, items: int | None = None) -> int:
+        """BOS/EOS plus ``items`` fixed-stride item blocks."""
+        item_count = self.train_total_items if items is None else int(items)
+        return 2 + item_count * int(tokens_per_item)
 
     def validate(self) -> "NextSongProtocol":
-        if self.min_reference_items < 2:
-            raise ValueError("Next-song generation requires at least two references")
-        if self.train_total_items != self.train_reference_items + 1:
-            raise ValueError("Training must reserve exactly one next-item target")
+        if self.min_reference_items != self.train_reference_items:
+            raise ValueError("Training must use exactly fifteen references")
+        if self.train_target_items != 5:
+            raise ValueError("Training must reserve exactly five continuation targets")
+        if self.train_total_items != self.train_reference_items + self.train_target_items:
+            raise ValueError("Training references and targets must sum to train_total_items")
         if self.eval_total_items != self.eval_reference_items + self.eval_target_items:
             raise ValueError("Evaluation references and targets must sum to eval_total_items")
-        if self.eval_num_samples != self.eval_target_items:
-            raise ValueError("Evaluation must draw one sample per ground-truth item")
+        if self.eval_num_samples != 1 or self.eval_generated_items != self.eval_target_items:
+            raise ValueError("Evaluation must draw one joint five-item completion")
         return self
 
     def validate_config(self, config: Mapping) -> "NextSongProtocol":
@@ -44,10 +50,12 @@ class NextSongProtocol:
         protocol = config.get("protocol", {})
         expected = {
             "min_reference_items": self.min_reference_items,
+            "train_target_items": self.train_target_items,
             "eval_total_items": self.eval_total_items,
             "eval_reference_items": self.eval_reference_items,
             "eval_target_items": self.eval_target_items,
             "eval_num_samples": self.eval_num_samples,
+            "eval_generated_items": self.eval_generated_items,
         }
         for name, value in expected.items():
             configured = int(protocol.get(name, value))

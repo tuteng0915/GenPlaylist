@@ -22,7 +22,7 @@ def valid_manifest():
         "token_layout": {
             "tokens_per_item": 13,
             "runtime_vocab_size": TOKEN_LAYOUT.runtime_vocab_size,
-            "model_length": 210,
+            "model_length": 262,
         },
     }
 
@@ -30,7 +30,7 @@ def valid_manifest():
 def test_valid_manifest_matches_frozen_protocol():
     validate_prepared_manifest(
         valid_manifest(),
-        {"seq_len": 16, "protocol": {}},
+        {"seq_len": 20, "protocol": {}},
         FakeTokenizer(),
     )
 
@@ -40,7 +40,7 @@ def test_wrong_split_count_is_rejected():
     manifest["split_counts"]["test"] = 468
     try:
         validate_prepared_manifest(
-            manifest, {"seq_len": 16, "protocol": {}}, FakeTokenizer())
+            manifest, {"seq_len": 20, "protocol": {}}, FakeTokenizer())
     except ValueError as exc:
         assert "split counts drifted" in str(exc)
     else:

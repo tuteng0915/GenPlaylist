@@ -4,7 +4,7 @@ hidden_size: 64 #768
 context_dim: 64  # frozen CLHE embedding dimension
 cond_dim: 128
 # cond_dim_cent: 128
-length: 210  # BOS + 16 * 13-token items + EOS
+length: 262  # main 8-cue model: BOS + 20 * 13-token items + EOS
 n_blocks: 6 #12
 n_heads: 8 #12
 scale_by_sigma: True

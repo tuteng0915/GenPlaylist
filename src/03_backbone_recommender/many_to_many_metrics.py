@@ -1,4 +1,4 @@
-"""Order-free metrics for five sampled next songs against five future songs."""
+"""Order-free metrics for five jointly generated songs against five targets."""
 
 from __future__ import annotations
 
@@ -73,6 +73,50 @@ def calculate_many_to_many_metrics(
         output["m2m_f1"].append(float(f1))
         output["m2m_hit"].append(float(matches > 0))
         output["m2m_unique_ratio"].append(len(pred_counter) / item_count)
+
+    return {
+        name: np.asarray(values, dtype=np.float32)
+        for name, values in output.items()
+    }
+
+
+def calculate_cue_multiset_metrics(
+    prediction_cues: np.ndarray,
+    target_cues: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Compare generated and target cue multisets across each five-item bundle."""
+    predictions = np.asarray(prediction_cues)
+    targets = np.asarray(target_cues)
+    if predictions.ndim != 3 or targets.ndim != 3:
+        raise ValueError("Cue tensors must have shape [batch, items, cues]")
+    if predictions.shape != targets.shape:
+        raise ValueError(
+            f"Prediction/target cue shapes differ: {predictions.shape} vs {targets.shape}")
+
+    output = {
+        "m2m_cue_recall": [],
+        "m2m_cue_precision": [],
+        "m2m_cue_f1": [],
+        "m2m_cue_unique_ratio": [],
+    }
+    for batch_index in range(predictions.shape[0]):
+        predicted = predictions[batch_index].reshape(-1).tolist()
+        truth = targets[batch_index].reshape(-1).tolist()
+        pred_counter = Counter(predicted)
+        truth_counter = Counter(truth)
+        matches = sum(
+            min(count, truth_counter[cue])
+            for cue, count in pred_counter.items()
+        )
+        recall = matches / max(len(truth), 1)
+        precision = matches / max(len(predicted), 1)
+        f1 = 2 * recall * precision / max(
+            recall + precision, np.finfo(np.float32).eps)
+        output["m2m_cue_recall"].append(recall)
+        output["m2m_cue_precision"].append(precision)
+        output["m2m_cue_f1"].append(f1)
+        output["m2m_cue_unique_ratio"].append(
+            len(pred_counter) / max(len(predicted), 1))
 
     return {
         name: np.asarray(values, dtype=np.float32)
