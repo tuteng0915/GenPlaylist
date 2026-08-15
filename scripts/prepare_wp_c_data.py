@@ -22,6 +22,7 @@ sys.path.insert(0, str(SRC_ROOT))
 sys.path.insert(0, str(WP_ROOT))
 
 from dataset import AbstractDataset  # noqa: E402
+from config_composition import compose_wp_c_config  # noqa: E402
 from genplaylist_tokenizer import GenPlaylistTokenizer  # noqa: E402
 from prepared_data import (  # noqa: E402
     EXPECTED_SPLIT_COUNTS,
@@ -251,9 +252,7 @@ def main() -> int:
     temp = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
     try:
         from datasets import DatasetDict
-        from omegaconf import OmegaConf
-
-        config = OmegaConf.load(WP_ROOT / "configs" / "config.yaml")
+        config = compose_wp_c_config()
         config.data_root = str(args.data_dir.expanduser().resolve())
         artifact_dir = args.artifact_dir.expanduser().resolve()
         cue_dir = args.cue_dir.expanduser().resolve()
