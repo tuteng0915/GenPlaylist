@@ -269,6 +269,8 @@ def evaluate_setting(
     direct_hit_weighted = 0.0
     retrieval_cosine_weighted = 0.0
     prediction_count = 0
+    all_prediction_ids: list[list[str]] = []
+    all_target_ids: list[list[str]] = []
     for start in range(0, len(reference_rows), batch_size):
         stop = min(start + batch_size, len(reference_rows))
         references = semantic_tokens[reference_rows[start:stop]]
@@ -290,6 +292,10 @@ def evaluate_setting(
         target_features = catalog_embeddings[selected_targets]
         prediction_ids = np.asarray(item_ids, dtype=object)[predicted_rows]
         target_ids = np.asarray(item_ids, dtype=object)[selected_targets]
+        all_prediction_ids.extend(
+            [[str(item_id) for item_id in row] for row in prediction_ids.tolist()])
+        all_target_ids.extend(
+            [[str(item_id) for item_id in row] for row in target_ids.tolist()])
         metrics = calculate_many_to_many_metrics(
             prediction_features, target_features, prediction_ids, target_ids)
         for name, values in metrics.items():
@@ -310,6 +316,11 @@ def evaluate_setting(
     output.update({
         "rvq_direct_hit_rate": direct_hit_weighted / prediction_count,
         "retrieval_cosine": retrieval_cosine_weighted / prediction_count,
+        "predictions": {
+            "item_ids": all_prediction_ids,
+            "target_item_ids": all_target_ids,
+            "shape": [len(reference_rows), generated_items],
+        },
     })
     return output
 
@@ -355,21 +366,20 @@ def main() -> None:
         reference_rows = reference_rows[:args.max_examples]
         target_rows = target_rows[:args.max_examples]
 
-    settings = {}
-    for generated_items in (1, 5):
-        settings[f"15_to_{generated_items}_joint_full_mask"] = evaluate_setting(
-            model=model, tokenizer=tokenizer,
-            reference_rows=reference_rows, target_rows=target_rows,
-            semantic_tokens=semantic_tokens, codebook_weights=codebook_weights,
-            catalog_embeddings=catalog_embeddings,
-            catalog_embeddings_l2=catalog_embeddings_l2,
-            item_ids=item_ids, generated_items=generated_items,
-            batch_size=args.batch_size, steps=steps, seed=args.seed,
-            device=args.device)
+    setting = evaluate_setting(
+        model=model, tokenizer=tokenizer,
+        reference_rows=reference_rows, target_rows=target_rows,
+        semantic_tokens=semantic_tokens, codebook_weights=codebook_weights,
+        catalog_embeddings=catalog_embeddings,
+        catalog_embeddings_l2=catalog_embeddings_l2,
+        item_ids=item_ids, generated_items=5,
+        batch_size=args.batch_size, steps=steps, seed=args.seed,
+        device=args.device)
+    predictions = setting.pop("predictions")
 
     manifest_path = prepared_dir / "prepared_manifest.json"
     payload = {
-        "result_schema": "genplaylist-ddbc-base-zero-shot-v1",
+        "result_schema": "genplaylist-ddbc-base-zero-shot-v2",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit(),
         "checkpoint": {
@@ -397,12 +407,10 @@ def main() -> None:
             "sampler": str(source_config.sampling.predictor),
             "full_catalog_retrieval": True,
             "generation": "joint_full_mask",
-            "targets": {
-                "15_to_1": "song_16",
-                "15_to_5": "songs_16_through_20",
-            },
+            "targets": "songs_16_through_20",
         },
-        "settings": settings,
+        "settings": {"15_to_5_joint_full_mask": setting},
+        "predictions": predictions,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = output_path.with_name(output_path.name + ".tmp")

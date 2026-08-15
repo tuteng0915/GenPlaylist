@@ -88,6 +88,12 @@ class Evaluator:
         self.sm_topk = config.get('sm_topk', 1)
         self._sm_topk_batch = None  # set by retrive_item each call
 
+        # Exact catalog IDs are retained in test order so representation-
+        # independent metrics (for example, MERT) can be computed without
+        # rerunning the expensive diffusion sampler.
+        self.evaluated_prediction_ids = []
+        self.evaluated_target_ids = []
+
 
     def f1_at_k(self,preds, k, labels):
         return 2*self.recall_at_k(preds, k, labels)*self.recall_at_k(preds,k,labels)/(self.recall_at_k(preds, k, labels)+self.recall_at_k(preds,k,labels))
@@ -666,6 +672,10 @@ class Evaluator:
                     target_cues[batch_index, target_index] = cue_tokens
 
         self.total_samples += batch_size
+        self.evaluated_prediction_ids.extend(
+            [[str(item_id) for item_id in row] for row in prediction_ids.tolist()])
+        self.evaluated_target_ids.extend(
+            [[str(item_id) for item_id in row] for row in target_ids.tolist()])
         metrics = calculate_many_to_many_metrics(
             prediction_features, target_features, prediction_ids, target_ids)
         if joint_prediction_cues is not None:

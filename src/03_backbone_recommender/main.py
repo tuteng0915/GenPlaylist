@@ -355,8 +355,12 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
   prepared_manifest_path = (
       Path(prepared_path_value).expanduser().resolve() / 'prepared_manifest.json'
       if prepared_path_value else None)
+  if (len(evaluator.evaluated_prediction_ids) != len(tokenized_dataset['test'])
+          or len(evaluator.evaluated_target_ids) != len(tokenized_dataset['test'])):
+      raise ValueError(
+          "Evaluator did not retain one prediction/target block per test example")
   payload = {
-      'result_schema': 'genplaylist-wp-c-joint-15to5-eval-v2',
+      'result_schema': 'genplaylist-wp-c-joint-15to5-eval-v3',
       'created_utc': datetime.now(timezone.utc).isoformat(),
       'git_commit': config.eval.get('git_commit', None),
       'checkpoint': {
@@ -386,6 +390,11 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
           'official_protocol': not allow_protocol_override,
       },
       'metrics': dict(output_results),
+      'predictions': {
+          'item_ids': evaluator.evaluated_prediction_ids,
+          'target_item_ids': evaluator.evaluated_target_ids,
+          'shape': [len(tokenized_dataset['test']), eval_generated_items],
+      },
   }
   results_path.parent.mkdir(parents=True, exist_ok=True)
   temporary_path = results_path.with_name(results_path.name + '.tmp')
