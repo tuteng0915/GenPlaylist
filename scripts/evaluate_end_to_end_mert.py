@@ -87,6 +87,8 @@ def main() -> int:
 
     results = {}
     artifacts = {}
+    per_history_by_system = {}
+    diversity_by_system = {}
     for system in SYSTEMS:
         slug = _slug(system)
         embedding_path = generated_dir / f"{slug}_mert_embeddings_l2.npy"
@@ -113,10 +115,12 @@ def main() -> int:
             "reference_max_similarity": reference_max,
             "catalog_max_similarity": catalog_max,
         }
+        per_history_by_system[system] = per_history
+        diversity_by_system[system] = _diversity(generated)
         results[system] = {
             "metrics": {
                 name: float(values.mean()) for name, values in per_history.items()
-            } | {"cross_history_diversity": _diversity(generated)},
+            } | {"cross_history_diversity": diversity_by_system[system]},
             "confidence_intervals_95": {
                 name: _bootstrap_mean_interval(
                     values, samples=args.bootstrap_samples, seed=args.bootstrap_seed)
@@ -126,6 +130,31 @@ def main() -> int:
         artifacts[system] = {
             "manifest_sha256": sha256_file(manifest_path),
             "embedding_sha256": sha256_file(embedding_path),
+        }
+
+    paired_differences = {}
+    for left, right in (
+        ("GenPlaylist", "ACE-Step-Direct"),
+        ("GenPlaylist", "DDBC-SFT"),
+        ("DDBC-SFT", "ACE-Step-Direct"),
+    ):
+        name = f"{left} minus {right}"
+        paired_differences[name] = {
+            metric: {
+                "mean": float((per_history_by_system[left][metric]
+                               - per_history_by_system[right][metric]).mean()),
+                "confidence_interval_95": _bootstrap_mean_interval(
+                    per_history_by_system[left][metric]
+                    - per_history_by_system[right][metric],
+                    samples=args.bootstrap_samples,
+                    seed=args.bootstrap_seed,
+                ),
+            }
+            for metric in per_history_by_system[left]
+        }
+        paired_differences[name]["cross_history_diversity"] = {
+            "difference": (
+                diversity_by_system[left] - diversity_by_system[right])
         }
 
     payload = {
@@ -138,6 +167,7 @@ def main() -> int:
         "catalog_mert_manifest_sha256": sha256_file(catalog_manifest_path),
         "generated_artifacts": artifacts,
         "systems": results,
+        "paired_differences": paired_differences,
         "bootstrap": {"samples": args.bootstrap_samples, "seed": args.bootstrap_seed},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)

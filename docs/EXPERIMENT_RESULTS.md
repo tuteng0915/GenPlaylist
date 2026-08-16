@@ -17,7 +17,7 @@ bootstrap intervals with seed 42.
 | DDBC-Base | 0.8723 | 0.0185 | 0.8915 | 0.4005 |
 | DDBC-SFT (0 cues) | 0.8726 | 0.0223 | 0.8923 | **0.4055** |
 | GenPlaylist (8 cues, curriculum) | 0.8722 | 0.0208 | 0.8916 | 0.3714 |
-| TIGER adaptation | 0.8654 | 0.0066 | 0.8842 | 0.0043 |
+| TIGER adaptation (LR $10^{-3}$) | 0.8745 | 0.0550 | 0.8968 | 0.1909 |
 
 The corresponding 95% intervals are:
 
@@ -28,7 +28,7 @@ The corresponding 95% intervals are:
 | DDBC-Base | [0.8695, 0.8751] | [0.0145, 0.0227] | [0.8902, 0.8928] |
 | DDBC-SFT (0 cues) | [0.8696, 0.8754] | [0.0181, 0.0268] | [0.8909, 0.8936] |
 | GenPlaylist (8 cues, curriculum) | [0.8693, 0.8750] | [0.0170, 0.0249] | [0.8903, 0.8929] |
-| TIGER adaptation | [0.8628, 0.8679] | [0.0043, 0.0091] | [0.8832, 0.8853] |
+| TIGER adaptation (LR $10^{-3}$) | [0.8716, 0.8773] | [0.0478, 0.0625] | [0.8954, 0.8982] |
 
 SASRec is currently the strongest proxy method. The intervals also show that
 its Recall@5 improvement over CLHE-kNN is not explained by history sampling
@@ -37,11 +37,12 @@ tokens improve catalog continuation. Their value must be tested in the
 end-to-end audio experiment rather than inferred from these rows.
 
 The TIGER adaptation generates one constrained semantic ID at a time and
-recursively appends five predictions. Its released-paper hyperparameters
-(Adafactor, learning rate 0.01 through step 10,000, then inverse-square-root
-decay) collapse to only 22 unique predicted tracks on this smaller catalog.
-We therefore retain the result as a transparent adaptation diagnostic rather
-than evidence about TIGER's original benchmark implementation.
+recursively appends five predictions. Directly transferring the reported peak
+learning rate of 0.01 collapses to only 22 unique tracks on this smaller
+catalog (N1 0.8654, Recall@5 0.0066, M2M 0.8842). Lowering only the Adafactor
+peak to 0.001 restores 977 unique predictions and produces the reported row.
+This stronger adaptation is used in the main comparison; the collapsed run is
+retained as a schedule diagnostic rather than evidence about TIGER itself.
 
 ## Cue and loss ablations
 
@@ -52,17 +53,20 @@ frozen pseudo-label diagnostic.
 | Variant | N1-MERT | Recall@5 | M2M-MERT | Coverage@5 | Cue F1 |
 |---|---:|---:|---:|---:|---:|
 | Full (8 cues) | 0.8722 | 0.0208 | 0.8916 | 0.3714 | 0.2832 |
-| Without cues | **0.8726** | **0.0223** | **0.8923** | **0.4055** | N/A |
+| Without cues | 0.8726 | **0.0223** | **0.8923** | **0.4055** | N/A |
 | 4 cues | 0.8731 | 0.0202 | 0.8915 | 0.3811 | 0.2794 |
 | 16 cues | 0.8698 | 0.0155 | 0.8916 | 0.3598 | **0.2997** |
 | 8 cues, uniform loss | 0.8713 | 0.0202 | 0.8911 | 0.3655 | 0.2782 |
-| 8 cues, RVQ-first 0.05 to 0.25 | pending | pending | pending | pending | pending |
+| 8 cues, RVQ-first 0.05 to 0.25 | **0.8735** | 0.0196 | **0.8923** | 0.3919 | 0.2748 |
 
 The default curriculum raises the per-cue weight from 0.1 to 1.0 by step
 5,000. With eight cues, the final raw cue-weight sum is 8.0, whereas the three
-RVQ layers plus collision token sum to 5.0. The pending RVQ-first run instead
+RVQ layers plus collision token sum to 5.0. The RVQ-first run instead
 uses a per-cue schedule of 0.05 to 0.25 through step 10,000, reducing the final
 cue share from 61.5% to 28.6% before active-weight normalization.
+RVQ-first improves N1-MERT, M2M-MERT, and coverage over the default curriculum,
+but slightly lowers Recall@5 and cue F1. It therefore supports a loss-balance
+effect, not a uniform improvement claim.
 
 ## Reproducibility anchors
 
@@ -74,14 +78,16 @@ cue share from 61.5% to 28.6% before active-weight normalization.
   `3bac267feb33c8360d8b4f913cd4abf81c401d6ca15c49f2f0ea7d87063ade51`
 - SASRec prediction SHA-256:
   `295fd6876f00bac7750a786bc4973fdc9cd3f6d11c302813a54e0317a47cab6a`
-- TIGER prediction SHA-256:
-  `3ac4a85ac1cf597cd0cc3b2a9f50b5ae95d67fed546734022ae3b935f8dff2e3`
+- TIGER LR-$10^{-3}$ prediction SHA-256:
+  `8e4ca8858cb65901065b7270d9a39da3770d5a5d9750e823e885665cfe386b5b`
 - DDBC-Base prediction SHA-256:
   `03a9447a7ea1058a55a375192982f0c8b9f11cded6b4a6484b671504886bc342`
 - DDBC-SFT v4 plan SHA-256:
   `13fca255859809db6e7cca5bf0a6460ea1d4c1fa55ad10c26b23fd6e131922dc`
 - GenPlaylist v4 plan SHA-256:
   `f341b77d8f61ec5849d36398967fb170570330ab5f01ed512e97ec555bf4710b`
+- GenPlaylist RVQ-first prediction SHA-256:
+  `275d8e8a52a684bb4724d5340270ad82698bea41919e6ac46903fe87881241b6`
 
 The v4 WP-C result schema stores retrieved item IDs together with the exact
 generated semantic token IDs and logical cue IDs. These plans are the only
