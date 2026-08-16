@@ -114,6 +114,12 @@ The frozen output roots on the server are:
 - automatic metrics:
   `data/processed/genplaylist-end-to-end/metrics-v1`
 
+The matched RVQ-first schedule ablation uses the parallel roots
+`qwen3-rvq-first-v1`, `ace-step-rvq-first-v1`, and `metrics-rvq-first-v1`
+under the same `genplaylist-end-to-end` directory. It changes only the trained
+planner checkpoint; verbalizer, renderer, examples, durations, inference
+steps, and per-history seeds remain fixed.
+
 The main automatic audio metrics are VGGish FAD against the 941 immediate real
 successors, MERT History Fit against the 15 visible references, and CLAP-A
 cosine agreement with the generated music-attribute condition. MERT similarity
@@ -172,3 +178,38 @@ Reproducibility hashes:
   `d5ea744d08c089eb2e632a191abca09e49a859a411e1afc2e81fcb9a9bc9f184`
 - VGGish FAD evaluation:
   `b292958b55fab11b0fa7bb7abbc5f6c5d99d2389ac94235ad47d4777c738c1c3`
+- verbalization audit:
+  `5084d1ddec711cc24f87ff48c51ca3f18701400d81b2251adf27e010240a5c90`
+
+### RVQ-first generated-audio ablation
+
+| Schedule | VGGish FAD ↓ | MERT History Fit ↑ | CLAP-A ↑ |
+|---|---:|---:|---:|
+| Default | 5.2457 | 0.8434 | **0.2284** |
+| RVQ-first | **4.9170** | **0.8444** | 0.2241 |
+
+Relative to Default, RVQ-first changes FAD by -0.3287. FAD is a corpus-level
+point estimate, so no sample-level confidence interval is attached. The paired
+History-Fit difference is 0.0010 (95% CI [-0.0004, 0.0025]), and the paired
+CLAP-A difference is -0.0043 (95% CI [-0.0113, 0.0028]). Thus the ablation
+improves the observed distributional-quality score but does not detectably
+change history alignment or attribute adherence.
+
+All 941 RVQ-first verbalizations pass the same nonempty and verse/chorus
+checks. Three attribute strings contain fewer than six comma-separated fields.
+The first generated plan repeats at least one cue phrase for 524 histories,
+compared with 513 under Default; the schedule therefore does not resolve cue
+duplication at the actual synthesis boundary.
+
+RVQ-first reproducibility hashes:
+
+- paired automatic comparison:
+  `7a54a7fee88d133b9e4beed9bd247f928331414500e1232f6b914aef3a90d9ef`
+- MERT manifest:
+  `d78d7ae2381184627ca83cd22cb99a3a433de99fcb41b08dc1d97426343de5ae`
+- CLAP-A evaluation:
+  `04b7cf89dcc773728184bbe9079562405cb6f77b78d9872f10b945083f5b5954`
+- VGGish FAD evaluation:
+  `c74003ec2dbe27deb4f6d1a4e7be0f1c0700a3289061c999b31ace92aa2a1ebb`
+- verbalization audit:
+  `ef34da0465298afc0b6d1453addd1b73de3534a652369d92e3cc86e7ad8f0313`
