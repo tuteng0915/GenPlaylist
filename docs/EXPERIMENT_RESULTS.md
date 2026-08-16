@@ -87,3 +87,35 @@ The v4 WP-C result schema stores retrieved item IDs together with the exact
 generated semantic token IDs and logical cue IDs. These plans are the only
 valid inputs to the offline WP-D audio experiment; catalog cue labels must not
 be substituted for GenPlaylist predictions.
+
+## Frozen end-to-end audio protocol
+
+The end-to-end run renders one 30-second waveform for each of the 941 histories
+and each of three systems: ACE-Step-Direct, DDBC-SFT, and GenPlaylist. The
+verbalizer is `Qwen/Qwen3-4B-Instruct-2507` at revision
+`cdbee75f17c01a7cc42f958dc650907174af0554`, using greedy decoding. The renderer
+is `ACE-Step/ACE-Step-v1-3.5B` at revision
+`82cd0d7b6322bd28cd4e830fe675ddb6180ce36c`, with 60 Euler steps. History
+`i` uses diffusion seed `42000 + i` for all three systems. This matched-seed
+design isolates the conditioning change from ACE-Step's initial noise.
+
+The frozen output roots on the server are:
+
+- Qwen3 conditions:
+  `data/processed/genplaylist-end-to-end/qwen3-4b-verbalization-v1`
+- ACE-Step waveforms:
+  `data/processed/genplaylist-end-to-end/ace-step-v1`
+- automatic metrics:
+  `data/processed/genplaylist-end-to-end/metrics-v1`
+
+The main automatic audio metrics are VGGish FAD against the 941 immediate real
+successors, MERT History Fit against the 15 visible references, and CLAP-A
+cosine agreement with the generated music-attribute condition. MERT similarity
+to the immediate successor, cross-history diversity, and maximum similarity to
+the visible references or full catalog are retained as diagnostics. MERT uses
+the same frozen revision recorded above. CLAP-A uses LAION-CLAP's non-fusion
+`630k-audioset-best.pt` checkpoint at Hugging Face revision
+`b3708341862f581175dba5c356a4ebf74a9b6651` (SHA-256
+`8053c9775516af2f4902e1e8281e356cc1bf7a85e8b761908170767b77c3f037`). Its
+single 10-second crop uses the same `42000 + i` rule across systems. The WP-D
+demo is not modified by these offline runners.
