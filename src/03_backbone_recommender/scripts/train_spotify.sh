@@ -21,6 +21,10 @@ LIMIT_TRAIN_BATCHES="${GENPLAYLIST_LIMIT_TRAIN_BATCHES:-1.0}"
 LOSS_CURRICULUM="${GENPLAYLIST_LAYER_LOSS_CURRICULUM:-true}"
 ACTIVE_CUES="${GENPLAYLIST_ACTIVE_CUES:-8}"
 STRUCTURE_CONDITIONING="${GENPLAYLIST_STRUCTURE_CONDITIONING:-false}"
+CUE_WEIGHT="${GENPLAYLIST_CUE_WEIGHT:-1.0}"
+CUE_WARMUP_INITIAL_WEIGHT="${GENPLAYLIST_CUE_WARMUP_INITIAL_WEIGHT:-0.1}"
+CUE_WARMUP_START_STEP="${GENPLAYLIST_CUE_WARMUP_START_STEP:-1000}"
+CUE_WARMUP_END_STEP="${GENPLAYLIST_CUE_WARMUP_END_STEP:-5000}"
 
 case "$ACTIVE_CUES" in
   0|4|8|16) ;;
@@ -42,7 +46,7 @@ esac
 
 case "$LOSS_CURRICULUM" in
   true)
-    LOSS_VARIANT="rvq-cue-warmup"
+    LOSS_VARIANT="rvq-cue-warmup-cw${CUE_WARMUP_INITIAL_WEIGHT}to${CUE_WEIGHT}-s${CUE_WARMUP_START_STEP}to${CUE_WARMUP_END_STEP}"
     ;;
   false)
     LOSS_VARIANT="uniform"
@@ -114,6 +118,10 @@ python main.py \
   trainer.max_steps="$MAX_STEPS" \
   trainer.limit_train_batches="$LIMIT_TRAIN_BATCHES" \
   training.layer_loss_weights.enabled="$LOSS_CURRICULUM" \
+  training.layer_loss_weights.cue_weight="$CUE_WEIGHT" \
+  training.layer_loss_weights.warmup.initial_cue_weight="$CUE_WARMUP_INITIAL_WEIGHT" \
+  training.layer_loss_weights.warmup.start_step="$CUE_WARMUP_START_STEP" \
+  training.layer_loss_weights.warmup.end_step="$CUE_WARMUP_END_STEP" \
   parameterization=subs \
   eval.compute_generative_perplexity=False \
   sampling.steps=25 \
