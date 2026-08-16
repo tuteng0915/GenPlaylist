@@ -17,7 +17,7 @@ bootstrap intervals with seed 42.
 | DDBC-Base | 0.8723 | 0.0185 | 0.8915 | 0.4005 |
 | DDBC-SFT (0 cues) | 0.8726 | 0.0223 | 0.8923 | **0.4055** |
 | GenPlaylist (8 cues, curriculum) | 0.8722 | 0.0208 | 0.8916 | 0.3714 |
-| TIGER adaptation | pending | pending | pending | pending |
+| TIGER adaptation | 0.8654 | 0.0066 | 0.8842 | 0.0043 |
 
 The corresponding 95% intervals are:
 
@@ -28,12 +28,20 @@ The corresponding 95% intervals are:
 | DDBC-Base | [0.8695, 0.8751] | [0.0145, 0.0227] | [0.8902, 0.8928] |
 | DDBC-SFT (0 cues) | [0.8696, 0.8754] | [0.0181, 0.0268] | [0.8909, 0.8936] |
 | GenPlaylist (8 cues, curriculum) | [0.8693, 0.8750] | [0.0170, 0.0249] | [0.8903, 0.8929] |
+| TIGER adaptation | [0.8628, 0.8679] | [0.0043, 0.0091] | [0.8832, 0.8853] |
 
 SASRec is currently the strongest proxy method. The intervals also show that
 its Recall@5 improvement over CLHE-kNN is not explained by history sampling
 noise. Conversely, the completed proxy runs do not support a claim that cue
 tokens improve catalog continuation. Their value must be tested in the
 end-to-end audio experiment rather than inferred from these rows.
+
+The TIGER adaptation generates one constrained semantic ID at a time and
+recursively appends five predictions. Its released-paper hyperparameters
+(Adafactor, learning rate 0.01 through step 10,000, then inverse-square-root
+decay) collapse to only 22 unique predicted tracks on this smaller catalog.
+We therefore retain the result as a transparent adaptation diagnostic rather
+than evidence about TIGER's original benchmark implementation.
 
 ## Cue and loss ablations
 
@@ -66,6 +74,8 @@ cue share from 61.5% to 28.6% before active-weight normalization.
   `3bac267feb33c8360d8b4f913cd4abf81c401d6ca15c49f2f0ea7d87063ade51`
 - SASRec prediction SHA-256:
   `295fd6876f00bac7750a786bc4973fdc9cd3f6d11c302813a54e0317a47cab6a`
+- TIGER prediction SHA-256:
+  `3ac4a85ac1cf597cd0cc3b2a9f50b5ae95d67fed546734022ae3b935f8dff2e3`
 - DDBC-Base prediction SHA-256:
   `03a9447a7ea1058a55a375192982f0c8b9f11cded6b4a6484b671504886bc342`
 - DDBC-SFT v4 plan SHA-256:
