@@ -84,6 +84,12 @@ def _audit_system(
 
     exact_attribute_fields = attribute_field_histogram.get(
         expected_attribute_fields, 0)
+    below_attribute_fields = sum(
+        count for fields, count in attribute_field_histogram.items()
+        if fields < expected_attribute_fields)
+    above_attribute_fields = sum(
+        count for fields, count in attribute_field_histogram.items()
+        if fields > expected_attribute_fields)
     return {
         "examples": examples,
         "records_fingerprint": digest.hexdigest(),
@@ -94,7 +100,8 @@ def _audit_system(
         "mean_cue_unique_ratio": sum(unique_ratios) / len(unique_ratios),
         "expected_attribute_fields": expected_attribute_fields,
         "records_with_exact_attribute_fields": exact_attribute_fields,
-        "records_with_other_attribute_field_count": examples - exact_attribute_fields,
+        "records_below_expected_attribute_fields": below_attribute_fields,
+        "records_above_expected_attribute_fields": above_attribute_fields,
         "attribute_field_count_histogram": {
             str(key): value for key, value in sorted(attribute_field_histogram.items())
         },

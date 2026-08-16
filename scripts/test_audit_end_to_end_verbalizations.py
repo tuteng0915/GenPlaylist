@@ -48,6 +48,8 @@ def test_audit_counts_duplicates_and_attribute_fields() -> None:
         assert result["records_with_repeated_cue_terms"] == 1
         assert result["mean_cue_unique_ratio"] == 0.75
         assert result["records_with_exact_attribute_fields"] == 1
+        assert result["records_below_expected_attribute_fields"] == 1
+        assert result["records_above_expected_attribute_fields"] == 0
         assert result["attribute_field_count_histogram"] == {"1": 1, "2": 1}
 
 
