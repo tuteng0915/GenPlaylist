@@ -356,11 +356,15 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       Path(prepared_path_value).expanduser().resolve() / 'prepared_manifest.json'
       if prepared_path_value else None)
   if (len(evaluator.evaluated_prediction_ids) != len(tokenized_dataset['test'])
-          or len(evaluator.evaluated_target_ids) != len(tokenized_dataset['test'])):
+          or len(evaluator.evaluated_target_ids) != len(tokenized_dataset['test'])
+          or len(evaluator.evaluated_prediction_semantic_token_ids)
+          != len(tokenized_dataset['test'])
+          or len(evaluator.evaluated_prediction_cue_ids)
+          != len(tokenized_dataset['test'])):
       raise ValueError(
-          "Evaluator did not retain one prediction/target block per test example")
+          "Evaluator did not retain one complete prediction/target plan per test example")
   payload = {
-      'result_schema': 'genplaylist-wp-c-joint-15to5-eval-v3',
+      'result_schema': 'genplaylist-wp-c-joint-15to5-eval-v4',
       'created_utc': datetime.now(timezone.utc).isoformat(),
       'git_commit': config.eval.get('git_commit', None),
       'checkpoint': {
@@ -393,6 +397,8 @@ def _rec_eval(config, logger, tokenizer, tokenized_dataset):
       'predictions': {
           'item_ids': evaluator.evaluated_prediction_ids,
           'target_item_ids': evaluator.evaluated_target_ids,
+          'semantic_token_ids': evaluator.evaluated_prediction_semantic_token_ids,
+          'cue_ids': evaluator.evaluated_prediction_cue_ids,
           'shape': [len(tokenized_dataset['test']), eval_generated_items],
       },
   }

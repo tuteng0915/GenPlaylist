@@ -93,6 +93,8 @@ class Evaluator:
         # rerunning the expensive diffusion sampler.
         self.evaluated_prediction_ids = []
         self.evaluated_target_ids = []
+        self.evaluated_prediction_semantic_token_ids = []
+        self.evaluated_prediction_cue_ids = []
 
 
     def f1_at_k(self,preds, k, labels):
@@ -676,6 +678,17 @@ class Evaluator:
             [[str(item_id) for item_id in row] for row in prediction_ids.tolist()])
         self.evaluated_target_ids.extend(
             [[str(item_id) for item_id in row] for row in target_ids.tolist()])
+        self.evaluated_prediction_semantic_token_ids.extend(
+            joint_predictions.detach().cpu().to(torch.int64).tolist())
+        if joint_prediction_cues is not None:
+            cue_ids = (
+                joint_prediction_cues.astype(np.int64)
+                - int(self.tokenizer.cue_token_start))
+            if cue_ids.size and (
+                    int(cue_ids.min()) < 0
+                    or int(cue_ids.max()) >= int(self.tokenizer.cue_vocab_size)):
+                raise ValueError("Generated cue token is outside the frozen cue vocabulary")
+            self.evaluated_prediction_cue_ids.extend(cue_ids.tolist())
         metrics = calculate_many_to_many_metrics(
             prediction_features, target_features, prediction_ids, target_ids)
         if joint_prediction_cues is not None:

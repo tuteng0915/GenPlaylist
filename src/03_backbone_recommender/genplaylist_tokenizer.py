@@ -51,6 +51,8 @@ class GenPlaylistTokenizer:
     eos_token_id = eos_token
     mask_token_id = TOKEN_LAYOUT.mask_token
     vocab_size = TOKEN_LAYOUT.vocab_size
+    cue_token_start = TOKEN_LAYOUT.cue_token_start
+    cue_vocab_size = TOKEN_LAYOUT.cue_vocab_size
     tokens_per_item = TOKEN_LAYOUT.tokens_per_item
 
     def __init__(
