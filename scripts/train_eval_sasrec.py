@@ -22,6 +22,12 @@ import sys
 import time
 
 import numpy as np
+
+# CuBLAS reads this before its first CUDA handle is created.  Keeping the
+# setting inside the entry point makes seeded reruns reproducible without
+# relying on an undocumented launcher environment.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -313,7 +319,10 @@ def main() -> int:
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    torch.use_deterministic_algorithms(True, warn_only=True)
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
+    torch.use_deterministic_algorithms(True)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
