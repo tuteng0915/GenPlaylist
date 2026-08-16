@@ -67,10 +67,11 @@ not authorize WP-D demo code or UI changes.
 - [x] Expose `generate_next_song(ContextPrefix) -> SynthesisResult`.
 - [x] Keep an explicit research API for alternative samples of the same next slot.
 - [x] Validate catalog alignment, sparse IDs, generated token types, and output schema.
-- [ ] Version all server artifact paths/hashes and the newly trained checkpoint.
-- [ ] Run WP-C latent evaluation as one joint five-item completion against five future songs.
-- [ ] Compute corpus-level FAD/CLAP plus human next-song fit, quality, and novelty.
-- [ ] Run the full backbone -> verbalization -> ACE-Step path and inspect WAV output.
+- [x] Version server artifact paths/hashes and the newly trained checkpoint.
+- [x] Run WP-C latent evaluation as one joint five-item completion against five future songs.
+- [x] Compute corpus-level MERT History Fit, VGGish FAD, and CLAP-A.
+- [ ] Run the frozen WP-D listener study for history fit, quality, novelty, and preference.
+- [x] Run the full backbone -> verbalization -> ACE-Step path and validate generated audio.
 
 Server-only steps and expected artifact locations are documented in
 [`SERVER_MIGRATION.md`](SERVER_MIGRATION.md).

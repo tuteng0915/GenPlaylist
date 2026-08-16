@@ -1,6 +1,6 @@
 # GenPlaylist — Architecture & Design Document
 
-> **Status**: Implementation contract. Server artifacts and checkpoint validation remain pending.
+> **Status**: Implementation contract aligned with the frozen training and evaluation protocol.
 > **Base**: DDBC-Seq codebase (copied into `GenPlaylist_Code/`)
 
 ---
@@ -17,16 +17,12 @@ Ordered references C = (m_1, ..., m_t), t ≥ 2
   ├─ CLHE encode ──────────────────────────────────────────────────────┐
   │   E(m) ∈ R^64  (CLHE backbone, frozen)                             │
   │                                                                     │
-  ├─ Preference structure ──────────────────────────────────────────────┤
-  │   μ_C  = mean{ E(m) }                                              │
-  │   σ²_C = mean{ ||E(m) - μ_C||² }                                  │
-  │                                                                     │
   ├─ RVQ discretize ────────────────────────────────────────────────────┤
   │   E(m) → z(m) = (z1, z2, z3, z_conf)  [L=3, K=256, 1-indexed]     │
   │   + store 16 ranked cues; activate first 8 per item (WP-B)         │
   │                                                                     │
-  ├─ Dispersion-conditioned masked diffusion ───────────────────────────┤
-  │   conditioning: reference tokens (fixed) + μ_C, σ²_C (injected)   │
+  ├─ History-conditioned masked diffusion ──────────────────────────────┤
+  │   conditioning: 15 visible reference-item token blocks (fixed)     │
   │   target input: [BOI, MASK×12, EOS]; jointly denoise MASK payload │
   │   output: next-item token sequence [z1, z2, z3, z_conf, c1..c8]   │
   │                                                                     │
@@ -93,6 +89,10 @@ Note: CLHE codes are 1-indexed; embedding reconstruction uses `weight[code - 1]`
 
 The fifteen reference item blocks remain visible throughout training and reverse
 diffusion, providing the conditioning history for all five target blocks.
+- The default model does not inject the cached history mean or dispersion;
+  `sampling.structure_conditioning=false` is covered by a configuration test.
+- Prepared mean/dispersion arrays are retained only for diagnostics and legacy
+  checkpoint compatibility, not as default backbone inputs.
 - Every eligible chronological segment becomes a 20-song rolling window with
   exactly 15 references and five continuation targets.
 - Training samples require all 20 songs; stride is one song.
@@ -202,7 +202,7 @@ decode RVQ → Ê(m) = weight[z1-1] + weight[z2-1] + weight[z3-1]  ∈ R^64
     ├─ creative cue tokens c1..c8 → cue vocabulary lookup → imagery words
     │
     └─ LLM (Qwen3) prompt assembly:
-         neighbor metadata + cue words + playlist style summary (from μ_C kNN)
+         neighbor metadata + cue words + ordered-reference summary
          → music attributes (genre, mood, tempo, key, instrumentation, language)
          → lyric draft with [verse]/[chorus]/[bridge] section markers
                     ↓
@@ -235,11 +235,10 @@ WP-D synthesis/audio evaluation remains a separate later stage:
 | Metric | Description |
 |---|---|
 | FAD ↓ | Fréchet Audio Distance vs. held-out real music |
-| CLAP Score ↑ | Cosine similarity between generated audio CLAP embedding and lyric/attribute text |
-| Next-song semantic similarity ↑ | Similarity between generated audio and the held-out real next song |
-| Dispersion change error ↓ | Difference between adding the generated vs. real next song to the references |
-| Centroid shift error ↓ | Difference between generated and ground-truth next-song centroid shifts |
-| Human eval | Coherence / Music Quality / Overall Satisfaction (5-point Likert) |
+| MERT History Fit ↑ | Mean similarity between generated audio and the 15 references |
+| CLAP-A ↑ | Cosine similarity between generated audio and its music-attribute condition |
+| Next-song similarity ↑ | Diagnostic similarity to the compatible held-out successor |
+| Human eval | History fit / quality / novelty / preference (5-point scales) |
 
 ---
 
@@ -251,7 +250,7 @@ WP-D synthesis/audio evaluation remains a separate later stage:
 | `diffusion.py` | Full-mask continuation; generation not restricted to catalog items |
 | `tokenizer.py` | Vocab = 2894; main stride k=13; configurable 0/4/8/16 cues; update legal-position mask |
 | `dataset.py` | Build rolling 15-to-5 windows; cache optional history diagnostics |
-| `evaluator.py` | Replace retrieval metrics with FAD, CLAP-Sim, Δσ², CD, MERT/CLAP/ImageBind semantic sim |
+| `evaluator.py` | Report frozen proxy metrics and separate MERT/FAD/CLAP audio metrics |
 | `configs/config.yaml` | vocab_size=2894, rq_n_codebooks=3, rq_codebook_size=256, active_cue_tokens=8 |
 | `verbalization.py` | kNN via faiss; LLM prompt assembly from cues + neighbor metadata; Qwen3 API call |
 | `synthesis.py` | ACE-Step frozen pipeline wrapper; style_ref_audio_path support |

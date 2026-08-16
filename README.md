@@ -40,13 +40,13 @@ GenPlaylist_Code/
     │   └── cue_mining.py              # lyrics/metadata → cue_vocab.json + item2cues.json
     │
     ├── 03_backbone_recommender/       # WP-C: DDBC Backbone and Evaluation
-    │   ├── diffusion.py               # Dispersion-conditioned masked discrete diffusion
+    │   ├── diffusion.py               # History-conditioned masked discrete diffusion
     │   ├── genplaylist_tokenizer.py   # RVQ + configurable cues (8-cue main model)
     │   ├── tokenizer.py               # Legacy DISCO tokenizer (migration baseline)
-    │   ├── playlist_structure.py      # μ_C and σ²_C preference structure computation
+    │   ├── playlist_structure.py      # Optional cached history diagnostics (not default conditioning)
     │   ├── dataset.py / dataloader.py
     │   ├── evaluator.py
-    │   ├── models/                    # DIT backbone (AdaLN dispersion conditioning)
+    │   ├── models/                    # DIT backbone; visible history is the default condition
     │   ├── configs/
     │   └── main.py                    # train / rec_eval / ppl_eval / generate modes
     │
@@ -66,8 +66,8 @@ GenPlaylist_Code/
 User Input
   ↓ input_normalization/normalizer.py          [WP-A]
 ContextPrefix
-  ↓ backbone_recommender/playlist_structure.py  [WP-C]
-(μ_C, σ²_C)  +  RVQ tokens  (from creative_cues item2cues.json [WP-B])
+  ↓ RVQ tokens + ranked cues (from creative_cues item2cues.json [WP-B])
+Visible 15-item history
   ↓ backbone_recommender/diffusion.py           [WP-C]
 GeneratedItem  (z_hat_emb, cue_ids, ...)
   ↓ synthesis/verbalization.py                  [WP-D]
