@@ -72,6 +72,18 @@ def _atomic_json(path: Path, value: dict) -> None:
     os.replace(temporary, path)
 
 
+def _resume_identity(value: dict) -> dict:
+    """Return fields that must match when resuming a multi-hour run."""
+    comparable = dict(value)
+    comparable.pop("created_utc", None)
+    # Git provenance is retained in the manifest, but unrelated evaluation-only
+    # commits may land while generation shards are running. Frozen input hashes
+    # and decoding settings, rather than the moving repository HEAD, determine
+    # whether existing records are compatible.
+    comparable.pop("git_commit", None)
+    return comparable
+
+
 def _load_plan(path: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("result_schema") != "genplaylist-wp-c-joint-15to5-eval-v4":
@@ -344,9 +356,7 @@ def main() -> int:
     }
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        comparable = dict(existing)
-        comparable.pop("created_utc", None)
-        if comparable != identity:
+        if _resume_identity(existing) != _resume_identity(identity):
             raise ValueError("Existing verbalization directory has a different identity")
     else:
         _atomic_json(manifest_path, {

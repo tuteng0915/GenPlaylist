@@ -42,7 +42,16 @@ def test_reference_structure_is_mean_and_mean_squared_distance():
     assert np.isclose(sigma, 1.0)
 
 
+def test_resume_identity_ignores_only_time_and_repository_head():
+    original = {"git_commit": "old", "created_utc": "then", "seed": 42}
+    resumed = {"git_commit": "new", "created_utc": "now", "seed": 42}
+    assert MODULE._resume_identity(original) == MODULE._resume_identity(resumed)
+    resumed["seed"] = 7
+    assert MODULE._resume_identity(original) != MODULE._resume_identity(resumed)
+
+
 if __name__ == "__main__":
     test_semantic_plan_reconstructs_three_codebooks()
     test_reference_structure_is_mean_and_mean_squared_distance()
+    test_resume_identity_ignores_only_time_and_repository_head()
     print("  PASS  end-to-end verbalization plan tests")
