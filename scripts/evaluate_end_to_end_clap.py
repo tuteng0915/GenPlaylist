@@ -40,6 +40,18 @@ def _normalize(values: np.ndarray) -> np.ndarray:
     return values / norms
 
 
+def _projection_output_dim(projection) -> int:
+    """Return the final CLAP projection width across package versions."""
+    if hasattr(projection, "out_features"):
+        return int(projection.out_features)
+    widths = [int(module.out_features) for module in projection.modules()
+              if hasattr(module, "out_features")]
+    if not widths:
+        raise TypeError(
+            f"Cannot infer output width from {type(projection).__name__}")
+    return widths[-1]
+
+
 def _load_condition(
     audio_dir: Path, verbalization_dir: Path, system: str, index: int,
 ) -> tuple[Path, str]:
@@ -108,7 +120,7 @@ def main() -> int:
         tmodel="roberta",
     )
     model.load_ckpt(str(checkpoint), verbose=False)
-    embedding_dim = int(model.model.text_projection.shape[-1])
+    embedding_dim = _projection_output_dim(model.model.text_projection)
     tokenizer_revision = model.tokenize.init_kwargs.get("_commit_hash")
     identity = {
         "system": args.system,

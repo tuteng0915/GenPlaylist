@@ -25,6 +25,13 @@ def main() -> int:
         pass
     else:
         raise AssertionError("Zero CLAP embedding was accepted")
+
+    class Projection:
+        def modules(self):
+            return [type("Layer", (), {"out_features": 256})(),
+                    type("Layer", (), {"out_features": 512})()]
+
+    assert MODULE._projection_output_dim(Projection()) == 512
     print("end-to-end CLAP-A tests passed")
     return 0
 
