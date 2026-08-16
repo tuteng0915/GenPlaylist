@@ -67,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--audio-load-workers", type=int, default=8)
+    parser.add_argument("--system", action="append", choices=SYSTEMS)
     return parser.parse_args()
 
 
@@ -81,6 +82,7 @@ def main() -> int:
     catalog_audio_dir = args.catalog_audio_dir.expanduser().resolve()
     work_dir = args.work_dir.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
+    systems = tuple(args.system or SYSTEMS)
     if output_path.exists():
         raise FileExistsError(output_path)
     audio_manifest = audio_dir / "audio_manifest.json"
@@ -91,7 +93,7 @@ def main() -> int:
     for index, item_id in enumerate(_test_targets(prepared_dir)):
         _ensure_link(target_dir, f"{index:04d}.mp3", catalog_audio_dir / f"{item_id}.mp3")
     _validate_staging(target_dir)
-    for system in SYSTEMS:
+    for system in systems:
         system_dir = work_dir / "staging" / _slug(system)
         for index in range(EXPECTED_EXAMPLES):
             _ensure_link(
@@ -113,7 +115,7 @@ def main() -> int:
     background_embeddings = embeddings_dir / "real_next_vggish.npy"
     scores = {}
     artifact_hashes = {}
-    for system in SYSTEMS:
+    for system in systems:
         generated_embeddings = embeddings_dir / f"{_slug(system)}_vggish.npy"
         score = evaluator.score(
             str(target_dir),

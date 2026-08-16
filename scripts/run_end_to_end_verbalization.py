@@ -276,6 +276,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--max-examples", type=int, default=None)
+    parser.add_argument("--system", action="append", choices=SYSTEMS)
     return parser.parse_args()
 
 
@@ -283,6 +284,7 @@ def main() -> int:
     args = parse_args()
     prepared_dir = args.prepared_dir.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
+    systems = tuple(args.system or SYSTEMS)
     plans = {
         "DDBC-SFT": _load_plan(args.ddbc_sft_result.expanduser().resolve()),
         "GenPlaylist": _load_plan(args.genplaylist_result.expanduser().resolve()),
@@ -339,7 +341,7 @@ def main() -> int:
         "model_revision": caller.model_revision,
         "decoding": "greedy",
         "seed": args.seed,
-        "systems": list(SYSTEMS),
+        "systems": list(systems),
         "examples": EXPECTED_EXAMPLES,
         "reference_items": REFERENCE_ITEMS,
         "selected_prediction": 1,
@@ -369,7 +371,7 @@ def main() -> int:
         target_id = test_sequences[example_index][REFERENCE_ITEMS]
         mu_c, sigma_c2 = _reference_structure(
             reference_ids, item_to_row, catalog_embeddings)
-        for system in SYSTEMS:
+        for system in systems:
             destination = output_dir / system / f"{example_index:04d}.json"
             if destination.is_file():
                 continue

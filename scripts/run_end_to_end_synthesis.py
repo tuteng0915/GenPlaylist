@@ -133,7 +133,7 @@ def main() -> int:
             "rule": "seed_base + history_index; shared across systems",
             "seed_base": args.seed_base,
         },
-        "systems": list(SYSTEMS),
+        "systems": list(systems),
         "examples": EXPECTED_EXAMPLES,
     }
     manifest_path = output_dir / "audio_manifest.json"
