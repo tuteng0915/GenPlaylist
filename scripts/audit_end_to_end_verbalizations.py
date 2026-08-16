@@ -19,6 +19,13 @@ sys.path.insert(0, str(SRC_ROOT))
 from shared.artifacts import sha256_file  # noqa: E402
 
 
+DEFAULT_EXPECTED_CUES = {
+    "ACE-Step-Direct": 0,
+    "DDBC-SFT": 8,
+    "GenPlaylist": 8,
+}
+
+
 def _atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -62,7 +69,7 @@ def _audit_system(
         normalized_cues = [str(term).strip().casefold() for term in cue_terms]
         unique_count = len(set(normalized_cues))
         duplicate_cues += int(unique_count < expected_cues)
-        unique_ratios.append(unique_count / expected_cues)
+        unique_ratios.append(unique_count / expected_cues if expected_cues else 1.0)
 
         attributes = str(record.get("music_attributes", "")).strip()
         lyrics = str(record.get("lyric_draft", "")).strip()
@@ -100,18 +107,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--system", action="append")
     parser.add_argument("--expected-examples", type=int, default=941)
-    parser.add_argument("--expected-cues", type=int, default=8)
+    parser.add_argument(
+        "--expected-cues", action="append", default=[], metavar="SYSTEM=COUNT",
+        help="override the default expected cue count for one system")
     parser.add_argument("--expected-attribute-fields", type=int, default=6)
     return parser.parse_args()
 
 
+def _cue_overrides(values: list[str]) -> dict[str, int]:
+    result = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"Expected SYSTEM=COUNT, got {value!r}")
+        system, raw_count = value.rsplit("=", 1)
+        system = system.strip()
+        if not system or system in result:
+            raise ValueError(f"Invalid or duplicate cue override: {value!r}")
+        count = int(raw_count)
+        if count < 0:
+            raise ValueError(f"Cue count must be nonnegative: {value!r}")
+        result[system] = count
+    return result
+
+
 def main() -> int:
     args = parse_args()
-    if min(
-        args.expected_examples,
-        args.expected_cues,
-        args.expected_attribute_fields,
-    ) <= 0:
+    if min(args.expected_examples, args.expected_attribute_fields) <= 0:
         raise ValueError("Expected counts must be positive")
     root = args.verbalization_dir.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
@@ -123,12 +144,18 @@ def main() -> int:
     unexpected = set(systems) - set(manifest.get("systems", ()))
     if unexpected:
         raise ValueError(f"Systems absent from verbalization manifest: {sorted(unexpected)}")
+    cue_counts = {**DEFAULT_EXPECTED_CUES, **_cue_overrides(args.expected_cues)}
+    missing_cue_contract = set(systems) - set(cue_counts)
+    if missing_cue_contract:
+        raise ValueError(
+            "Expected cue counts must be provided for systems: "
+            f"{sorted(missing_cue_contract)}")
     results = {
         system: _audit_system(
             root,
             system,
             args.expected_examples,
-            args.expected_cues,
+            cue_counts[system],
             args.expected_attribute_fields,
         )
         for system in systems

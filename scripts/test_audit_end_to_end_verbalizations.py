@@ -51,6 +51,21 @@ def test_audit_counts_duplicates_and_attribute_fields() -> None:
         assert result["attribute_field_count_histogram"] == {"1": 1, "2": 1}
 
 
+def test_cue_overrides_are_explicit_and_nonnegative() -> None:
+    assert MODULE._cue_overrides(["GenPlaylist=8", "ACE-Step-Direct=0"]) == {
+        "GenPlaylist": 8,
+        "ACE-Step-Direct": 0,
+    }
+    for values in (["GenPlaylist"], ["GenPlaylist=-1"], ["A=1", "A=2"]):
+        try:
+            MODULE._cue_overrides(values)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Invalid overrides were accepted: {values}")
+
+
 if __name__ == "__main__":
     test_audit_counts_duplicates_and_attribute_fields()
+    test_cue_overrides_are_explicit_and_nonnegative()
     print("end-to-end verbalization audit tests passed")
