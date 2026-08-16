@@ -125,3 +125,50 @@ the same frozen revision recorded above. CLAP-A uses LAION-CLAP's non-fusion
 `8053c9775516af2f4902e1e8281e356cc1bf7a85e8b761908170767b77c3f037`). Its
 single 10-second crop uses the same `42000 + i` rule across systems. The WP-D
 demo is not modified by these offline runners.
+
+### Primary generated-audio results
+
+| System | VGGish FAD ↓ | MERT History Fit ↑ | CLAP-A ↑ |
+|---|---:|---:|---:|
+| ACE-Step-Direct | **4.9603** | **0.8448** | 0.2022 |
+| DDBC-SFT | 5.2300 | 0.8426 | 0.2231 |
+| GenPlaylist | 5.2457 | 0.8434 | **0.2284** |
+
+The history-level 95% intervals are:
+
+| System | MERT History Fit | CLAP-A |
+|---|---:|---:|
+| ACE-Step-Direct | [0.8430, 0.8465] | [0.1960, 0.2083] |
+| DDBC-SFT | [0.8409, 0.8443] | [0.2170, 0.2293] |
+| GenPlaylist | [0.8416, 0.8451] | [0.2223, 0.2344] |
+
+Paired bootstrap comparisons show no detectable History-Fit difference between
+GenPlaylist and DDBC-SFT (difference 0.0007, 95% CI
+[-0.0008, 0.0023]). GenPlaylist also does not significantly improve CLAP-A
+over DDBC-SFT (difference 0.0053, 95% CI [-0.0027, 0.0130]). Both planned
+systems improve CLAP-A over ACE-Step-Direct, whereas Direct obtains the best
+FAD and raw History Fit. These results support a condition-adherence benefit
+from preference planning in general, but do not yet isolate a benefit from
+model-predicted cues over retrieved catalog cues.
+
+The MERT diagnostics reinforce this interpretation. The Direct, DDBC-SFT, and
+GenPlaylist next-song similarities are 0.8463, 0.8438, and 0.8445; their
+cross-history diversities are 0.1025, 0.1002, and 0.1002. Maximum catalog
+similarity is approximately 0.937 for all three, so none is uniquely flagged
+by this memorization diagnostic.
+
+All 2,823 verbalizations contain nonempty attributes and lyrics, and all lyric
+drafts contain both verse and chorus markup. Fifteen attribute strings omit one
+of the six requested comma-separated fields but remain valid ACE-Step prompts.
+The default GenPlaylist plans contain at least one repeated cue phrase in 513
+of 941 histories; this model behavior is retained and reported through cue
+uniqueness rather than repaired after evaluation.
+
+Reproducibility hashes:
+
+- consolidated audio summary:
+  `c2462816d415637edd93f2f7dec647041b166d7d46e882fd653a21d3261f3183`
+- MERT audio evaluation:
+  `d5ea744d08c089eb2e632a191abca09e49a859a411e1afc2e81fcb9a9bc9f184`
+- VGGish FAD evaluation:
+  `b292958b55fab11b0fa7bb7abbc5f6c5d99d2389ac94235ad47d4777c738c1c3`
