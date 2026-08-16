@@ -501,7 +501,11 @@ def main() -> int:
             "objective": "teacher-forced next semantic-ID cross entropy",
             "semantic_id": "three frozen DDBC RVQ codes plus collision code",
             "optimizer": "Adafactor",
-            "learning_rate": "0.01 through step 10000, then inverse-square-root decay",
+            "learning_rate": {
+                "peak": args.learning_rate,
+                "constant_through_step": args.constant_lr_steps,
+                "after_constant": "inverse-square-root decay",
+            },
             "seed": args.seed,
             "model_config": model_config,
             "parameters": sum(parameter.numel() for parameter in model.parameters()),
