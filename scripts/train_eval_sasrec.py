@@ -107,6 +107,22 @@ class SASRec(nn.Module):
             for _ in range(num_blocks)
         ])
         self.final_norm = nn.LayerNorm(hidden_size, eps=1e-8)
+        self.apply(self._initialize_module)
+        with torch.no_grad():
+            self.item_embedding.weight[0].zero_()
+
+    @staticmethod
+    def _initialize_module(module: nn.Module) -> None:
+        # Match the small Gaussian initialization used by the reference SASRec
+        # implementation.  PyTorch's default Embedding N(0, 1) makes tied
+        # full-catalog logits unusably large at initialization.
+        if isinstance(module, (nn.Embedding, nn.Linear)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
 
     def encode(self, item_indices: torch.Tensor) -> torch.Tensor:
         if item_indices.ndim != 2 or item_indices.shape[1] != self.max_length:
