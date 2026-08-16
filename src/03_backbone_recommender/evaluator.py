@@ -681,13 +681,21 @@ class Evaluator:
         self.evaluated_prediction_semantic_token_ids.extend(
             joint_predictions.detach().cpu().to(torch.int64).tolist())
         if joint_prediction_cues is not None:
-            cue_ids = (
-                joint_prediction_cues.astype(np.int64)
-                - int(self.tokenizer.cue_token_start))
-            if cue_ids.size and (
-                    int(cue_ids.min()) < 0
-                    or int(cue_ids.max()) >= int(self.tokenizer.cue_vocab_size)):
-                raise ValueError("Generated cue token is outside the frozen cue vocabulary")
+            cue_ids = joint_prediction_cues.astype(np.int64)
+            if cue_ids.size:
+                semantic_width = self.tokenizer.n_digit + 1
+                example = next(
+                    (item_id for item_id, cues in self.tokenizer.item2cues.items() if cues),
+                    None)
+                if example is None:
+                    raise ValueError("Active cue layout has no catalog cue example")
+                encoded = self.tokenizer.encode_item(example)
+                cue_token_start = (
+                    int(encoded[1 + semantic_width])
+                    - int(self.tokenizer.item2cues[example][0]))
+                cue_ids = cue_ids - cue_token_start
+                if int(cue_ids.min()) < 0:
+                    raise ValueError("Generated cue token is below the frozen cue range")
             self.evaluated_prediction_cue_ids.extend(cue_ids.tolist())
         metrics = calculate_many_to_many_metrics(
             prediction_features, target_features, prediction_ids, target_ids)
