@@ -60,8 +60,34 @@ def test_inverse_square_root_schedule():
         MODULE._learning_rate(40_000, peak=0.01, constant_steps=10_000), 0.005)
 
 
+def test_constrained_generation_returns_a_valid_unseen_row():
+    class Args:
+        d_model = 32
+        d_kv = 8
+        d_ff = 64
+        num_layers = 1
+        num_heads = 2
+        dropout = 0.0
+
+    tokens = _tokens()
+    trie = MODULE.SemanticTrie(tokens)
+    model = MODULE._build_model(Args(), int(tokens.max()) + 1)
+    decoded = MODULE._generate_next_rows(
+        model,
+        np.asarray([[0, 1]], dtype=np.int64),
+        tokens,
+        trie,
+        beam_size=3,
+        batch_size=1,
+        device=torch.device("cpu"),
+    )
+    assert decoded.shape == (1,)
+    assert int(decoded[0]) in {2, 3, 4, 5}
+
+
 if __name__ == "__main__":
     test_trie_excludes_complete_items_without_blocking_siblings()
     test_batch_uses_only_suffix_next_item_transitions()
     test_inverse_square_root_schedule()
+    test_constrained_generation_returns_a_valid_unseen_row()
     print("  PASS  TIGER protocol tests")

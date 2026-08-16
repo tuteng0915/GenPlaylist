@@ -241,7 +241,6 @@ def _generate_next_rows(
             input_ids=inputs,
             attention_mask=attention,
             max_new_tokens=SEMANTIC_WIDTH + 1,
-            min_new_tokens=SEMANTIC_WIDTH + 1,
             num_beams=beam_size,
             num_return_sequences=1,
             do_sample=False,
