@@ -133,6 +133,22 @@ def test_sparse_ids_are_never_array_indices():
     assert np.allclose(encoded.mu_c, 1.5)
 
 
+def test_repeat_policy_is_dataset_specific():
+    tokenizer = make_tokenizer()
+    try:
+        tokenizer.encode_playlist(
+            ["18996", "18996", "73001"], context_items=2)
+    except ValueError as error:
+        assert "must be unique" in str(error)
+    else:
+        raise AssertionError("Playlist policy should reject repeated item IDs")
+    tokenizer.allow_repeated_items = True
+    encoded = tokenizer.encode_playlist(
+        ["18996", "18996", "73001"], context_items=2)
+    assert encoded.context_emb.shape == (2, 64)
+    assert np.allclose(encoded.sigma_c2, 0.0)
+
+
 def test_type_mask_matches_stride():
     tokenizer = make_tokenizer()
     legal = tokenizer.make_type_mask(15)

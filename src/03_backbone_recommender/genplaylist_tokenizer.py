@@ -87,6 +87,7 @@ class GenPlaylistTokenizer:
         self.item_id_to_row = {str(key): int(value) for key, value in item_id_to_row.items()}
         self.codebook_weights = np.asarray(codebook_weights, dtype=np.float32)
         self.max_items = 30
+        self.allow_repeated_items = False
         self.config = {"rq_codebook_size": TOKEN_LAYOUT.rq_codebook_size}
         self.dataset_dir = None
         self._validate_artifacts()
@@ -126,6 +127,13 @@ class GenPlaylistTokenizer:
             active_cues=int(config.get("active_cue_tokens", CUE_TOKENS)),
         )
         tokenizer.max_items = int(config.get("seq_len", 30))
+        repeat_setting = dataset.dataset_card.get("allow_repeated_items")
+        if repeat_setting is None:
+            repeat_setting = (
+                dataset.dataset_card.get("sequence_protocol", {}).get(
+                    "repeated_listens") == "retained"
+            )
+        tokenizer.allow_repeated_items = bool(repeat_setting)
         tokenizer.config = config
         tokenizer.dataset_dir = str(data_root)
         return tokenizer
@@ -244,8 +252,8 @@ class GenPlaylistTokenizer:
         if not 2 <= context_items < len(ids):
             raise ValueError(
                 "context_items must contain at least two references and leave targets")
-        if len(set(ids)) != len(ids):
-            raise ValueError("Playlist item IDs must be unique")
+        if not self.allow_repeated_items and len(set(ids)) != len(ids):
+            raise ValueError("Sequence item IDs must be unique for this dataset")
 
         sequence = [self.bos_token]
         target_mask = [False]

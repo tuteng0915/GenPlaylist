@@ -88,6 +88,7 @@ def main() -> int:
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "dataset": "Music4All-Onion v2 chronological listening histories",
             "frozen": True,
+            "allow_repeated_items": True,
             "seed": sequence_manifest["configuration"]["seed"],
             "wp_c_split_counts": expected_counts,
             "source_user_split": "80/20 user-disjoint train/test; validation is empty",
