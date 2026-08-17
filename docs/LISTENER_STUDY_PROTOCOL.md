@@ -53,26 +53,55 @@ builder creates the package with owner-only directories and files. The study
 host should serve only the selected reference labels and two candidate assets;
 it must never expose directory listings or the private manifest.
 
-The collection host should assign one case uniformly to each participant and
-randomize A/B independently at presentation time, recording
-`song_a_is_generated`. Each participant should submit one complete response so
-the response is the participant-level sampling unit. If repeated responses are
-allowed, a stable pseudonymous participant ID is required; the analysis script
-then averages within participant before bootstrapping.
+The standalone collection service assigns the least-used case to each new
+participant (randomly breaking ties) and balances which system appears as A
+within each case. This is randomized balanced assignment, not a second
+experimental condition. Each participant can submit one complete response, so
+the response is the participant-level sampling unit. The service HMAC-hashes
+the recruitment code with a secret key and never stores that code directly.
+
+Before deployment, verify the package without launching a server:
+
+```bash
+conda run -n music python scripts/run_frozen_listener_study.py \
+  --study-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-listener-study-v1 \
+  --validate-only
+```
+
+After ethics approval, copy
+`docs/LISTENER_STUDY_CONSENT_TEMPLATE.md` to a restricted location, replace
+every placeholder with approved text, and launch the standalone service:
+
+```bash
+conda run -n music python scripts/run_frozen_listener_study.py \
+  --study-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-listener-study-v1 \
+  --consent-file /restricted/path/approved_consent.md \
+  --database /restricted/path/responses.sqlite3 \
+  --participant-key /restricted/path/participant_hmac.key \
+  --server-name 127.0.0.1 \
+  --port 7861
+```
+
+Keep the service bound to localhost and publish it only through the
+institution's authenticated HTTPS entry point. Gradio public sharing is
+disabled. The database, its WAL files, participant HMAC key, private manifest,
+and audio directory are research data and must remain owner-restricted. Stop
+collection and make a consistent SQLite backup before analysis. This service
+is separate from, and does not modify, the WP-D demo.
 
 ## Collection fields
 
-Required fields are compatible with the current WP-D CSV:
+The standalone service records:
 
-- pseudonymous `session_id` (or a separately configured participant column);
+- random `session_id` and an HMAC-derived `participant_hash`;
 - case identifier and A/B assignment;
 - `fit_a`, `fit_b`, `quality_a`, `quality_b`, `novelty_a`, and `novelty_b`;
 - `preference` in `{Song A, Song B, No preference}`;
 - listening frequency and formal musical training;
 - optional free-text comments.
 
-The deployment should additionally record successful playback of both
-candidates. Target participant count, recruitment source, compensation,
+The form requires participants to confirm playback of both candidates. Target
+participant count, recruitment source, compensation,
 duplicate-response policy, playback-based exclusion, and any attention check
 must be fixed before inspecting responses. Exclusions must never depend on
 which system a participant preferred.
@@ -94,7 +123,19 @@ and restrict access to the minimum research team.
 
 ## Analysis
 
-After applying only the predeclared exclusions, run:
+After applying only the predeclared exclusions, analyze a stopped, consistent
+backup of the collection database directly:
+
+```bash
+python scripts/analyze_listener_study.py \
+  --responses /restricted/path/responses-backup.sqlite3 \
+  --output /restricted/path/listener-study-analysis.json \
+  --participant-column participant_hash \
+  --bootstrap-samples 10000 \
+  --bootstrap-seed 42
+```
+
+The analyzer also accepts a compatible CSV when needed:
 
 ```bash
 python scripts/analyze_listener_study.py \
@@ -109,6 +150,7 @@ The analysis unblinds A/B ratings, reports system means and paired
 GenPlaylist-minus-real differences for all three scales, and bootstraps by
 participant. Preference is the generated choice share with no-preference ties
 contributing 0.5 to each candidate; raw generated/real/tie counts are retained.
-Results are also stratified by formal musical training. The response CSV hash,
+Results are also stratified by formal musical training. The response-source hash,
 exclusions, bootstrap settings, and complete results are written to the output
-JSON.
+JSON. For SQLite input, the recorded SHA-256 covers the stopped backup file;
+do not hash or analyze a database while collection is still writing to its WAL.

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 
 import numpy as np
@@ -23,6 +24,7 @@ from evaluate_mert_proxy import _bootstrap_mean_interval  # noqa: E402
 
 
 DIMENSIONS = ("fit", "quality", "novelty")
+SQLITE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -44,14 +46,36 @@ def _parse_bool(value: object) -> bool:
     raise ValueError(f"Cannot parse boolean value {value!r}")
 
 
-def _rating(row: dict[str, str], name: str) -> float:
+def _load_raw_rows(path: Path) -> tuple[list[dict[str, object]], str]:
+    if path.suffix.casefold() not in SQLITE_SUFFIXES:
+        with path.open(newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle)), "csv"
+
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    connection.row_factory = sqlite3.Row
+    try:
+        columns = (
+            "session_id", "participant_hash", "case_id", "song_a_is_generated",
+            "fit_a", "fit_b", "quality_a", "quality_b", "novelty_a", "novelty_b",
+            "preference", "listening_freq", "musical_training", "playback_confirmed",
+            "notes", "submitted_utc",
+        )
+        rows = connection.execute(
+            f"SELECT {', '.join(columns)} FROM responses ORDER BY submitted_utc, session_id"
+        ).fetchall()
+        return [dict(row) for row in rows], "sqlite"
+    finally:
+        connection.close()
+
+
+def _rating(row: dict[str, object], name: str) -> float:
     value = float(row[name])
     if not np.isfinite(value) or not 1 <= value <= 5:
         raise ValueError(f"Rating {name} must be in [1, 5], got {value}")
     return value
 
 
-def _decode_row(row: dict[str, str], participant_column: str) -> dict:
+def _decode_row(row: dict[str, object], participant_column: str) -> dict:
     participant = str(row.get(participant_column, "")).strip()
     if not participant:
         raise ValueError(f"Missing participant identifier in {participant_column}")
@@ -159,8 +183,7 @@ def main() -> int:
         raise ValueError("Bootstrap samples must be positive and seed nonnegative")
     responses_path = args.responses.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
-    with responses_path.open(newline="", encoding="utf-8") as handle:
-        raw_rows = list(csv.DictReader(handle))
+    raw_rows, source_type = _load_raw_rows(responses_path)
     rows = [_decode_row(row, args.participant_column) for row in raw_rows]
     exclusions = {str(value) for value in args.exclude_participant}
     included = [row for row in rows if row["participant_id"] not in exclusions]
@@ -182,6 +205,7 @@ def main() -> int:
         "input": {
             "path": str(responses_path),
             "sha256": sha256_file(responses_path),
+            "source_type": source_type,
             "raw_responses": len(raw_rows),
             "participant_column": args.participant_column,
         },

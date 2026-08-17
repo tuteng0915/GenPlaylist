@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sqlite3
+import tempfile
 
 import numpy as np
 
@@ -53,7 +55,37 @@ def test_participant_is_bootstrap_unit() -> None:
         "generated": 2, "real": 0, "tie": 1}
 
 
+def test_sqlite_collection_database_loads_without_csv_export() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "responses.sqlite3"
+        connection = sqlite3.connect(path)
+        connection.execute(
+            """CREATE TABLE responses (
+                session_id TEXT, participant_hash TEXT, case_id TEXT,
+                song_a_is_generated INTEGER, fit_a INTEGER, fit_b INTEGER,
+                quality_a INTEGER, quality_b INTEGER, novelty_a INTEGER,
+                novelty_b INTEGER, preference TEXT, listening_freq TEXT,
+                musical_training TEXT, playback_confirmed INTEGER,
+                notes TEXT, submitted_utc TEXT)"""
+        )
+        connection.execute(
+            "INSERT INTO responses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "session-1", "participant-1", "case-1", 1, 5, 2, 4, 3, 3, 1,
+                "Song A", "Daily", "No", 1, "", "2026-08-17T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+        connection.close()
+        rows, source_type = MODULE._load_raw_rows(path)
+        assert source_type == "sqlite" and len(rows) == 1
+        decoded = MODULE._decode_row(rows[0], "participant_hash")
+        assert decoded["participant_id"] == "participant-1"
+        assert decoded["generated_fit"] == 5
+
+
 if __name__ == "__main__":
     test_unblinding_respects_side_assignment()
     test_participant_is_bootstrap_unit()
+    test_sqlite_collection_database_loads_without_csv_export()
     print("listener-study analysis tests passed")
