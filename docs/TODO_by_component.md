@@ -71,6 +71,7 @@ not authorize WP-D demo code or UI changes.
 - [x] Run WP-C latent evaluation as one joint five-item completion against five future songs.
 - [x] Compute corpus-level MERT History Fit, VGGish FAD, and CLAP-A.
 - [ ] Run the frozen WP-D listener study for history fit, quality, novelty, and preference.
+- [x] Freeze current-protocol listener-study case preparation and participant-level analysis.
 - [x] Run the full backbone -> verbalization -> ACE-Step path and validate generated audio.
 
 Server-only steps and expected artifact locations are documented in
