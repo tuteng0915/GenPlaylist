@@ -37,15 +37,15 @@ consume one selected latent plan until its demo contract is revised separately.
 - [x] Draw one joint five-item completion without sequential feedback.
 - [x] Score the 5x5 sets with full-catalog retrieval and Hungarian matching.
 - [x] Generate/convert the server-side CLHE, RVQ, semantic-token, and cue artifacts.
-- [ ] Train the new joint-15to5 checkpoint; the earlier next-one SFT checkpoint is only a baseline.
-- [ ] Run checkpoint preflight and one real joint five-item inference on the server.
-- [ ] Run the frozen joint 15->5 evaluation with the newly trained checkpoint.
+- [x] Train the new joint-15to5 checkpoint; the earlier next-one SFT checkpoint is only a baseline.
+- [x] Run checkpoint preflight and one real joint five-item inference on the server.
+- [x] Run the frozen joint 15->5 evaluation with the newly trained checkpoint.
 - [x] Add a versioned official evaluator that freezes EMA, seed 1, 256 steps,
   full-catalog retrieval, and atomic result metadata.
 - [x] Use the loss-scale-normalized RVQ/cue curriculum in Full and retain
       uniform weighting as an ablation; log effective weights.
 - [x] Add order-free generated-cue multiset metrics for the five-item continuation.
-- [ ] Compare the uniform-loss baseline with the RVQ/cue curriculum under an otherwise identical schedule.
+- [x] Compare the uniform-loss baseline with the RVQ/cue curriculum under an otherwise identical schedule.
 
 ## WP-D — Verbalization, synthesis, and study UI
 
@@ -60,7 +60,8 @@ not authorize WP-D demo code or UI changes.
 - [ ] Add structured LLM output validation, retry/timeout, and failure logging.
 - [ ] Calibrate the dispersion wording threshold from server training statistics.
 - [ ] Install/pin ACE-Step and listen-check real synthesized next songs.
-- [ ] Add study consent/privacy text and validate multi-user deployment.
+- [x] Provide a separate consent-gated, pseudonymous, transactional listener-study
+      service and validate it in the server environment; keep the WP-D demo unchanged.
 
 ## End-to-end pipeline and evaluation
 
