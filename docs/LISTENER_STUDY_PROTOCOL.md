@@ -48,6 +48,11 @@ revealing which candidate is generated. `public_manifest.json` contains only ref
 and blinded asset paths. `private_manifest.json` contains the unblinding key
 and must not be exposed to participants.
 
+"Public" describes the manifest content, not its filesystem permissions. The
+builder creates the package with owner-only directories and files. The study
+host should serve only the selected reference labels and two candidate assets;
+it must never expose directory listings or the private manifest.
+
 The collection host should assign one case uniformly to each participant and
 randomize A/B independently at presentation time, recording
 `song_a_is_generated`. Each participant should submit one complete response so

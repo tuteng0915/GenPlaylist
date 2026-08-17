@@ -213,3 +213,23 @@ RVQ-first reproducibility hashes:
   `c74003ec2dbe27deb4f6d1a4e7be0f1c0700a3289061c999b31ace92aa2a1ebb`
 - verbalization audit:
   `ef34da0465298afc0b6d1453addd1b73de3534a652369d92e3cc86e7ad8f0313`
+
+## Frozen listener-study package
+
+The offline study package at
+`data/processed/genplaylist-listener-study-v1` uniformly samples 25 of the 941
+frozen contexts without replacement using seed 42. Each case contains the 15
+reference labels and a blinded A/B pair: the primary GenPlaylist waveform and
+a centered clip of the immediate real next track. Both candidates are passed
+through the same 30-second, 44.1-kHz, stereo PCM16 WAV conversion. GenPlaylist
+occupies Song A in 13 cases and Song B in 12. All 50 WAV headers and hashes were
+validated against the private manifest.
+
+- participant-safe manifest SHA-256:
+  `6d0c2d402069f34d47d889e38e42ca13ec67a1748b7c7366fe2bcc5e603ac995`
+- private unblinding manifest SHA-256:
+  `d9d1779b18a8f9884fe9236905e071f17c47ac59a01d7db7eca61848dcee7986`
+
+These manifests freeze study materials only; no participant responses have
+been collected. The private manifest, real-audio excerpts, and raw response
+logs must not be published.

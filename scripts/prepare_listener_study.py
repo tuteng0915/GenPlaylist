@@ -164,8 +164,10 @@ def main() -> int:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Refusing to replace nonempty study package: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.chmod(0o700)
     assets_dir = output_dir / "participant_assets"
     assets_dir.mkdir()
+    assets_dir.chmod(0o700)
 
     sequences = _load_sequences(prepared_dir)
     metadata = _load_metadata(metadata_path)
@@ -178,6 +180,7 @@ def main() -> int:
         case_id = _opaque_case_id(index, args.seed)
         case_dir = assets_dir / case_id
         case_dir.mkdir()
+        case_dir.chmod(0o700)
         generated_source = _validated_generated_audio(
             generated_dir, args.generated_system, index)
         target_item = sequence[TARGET_OFFSET]
@@ -194,6 +197,8 @@ def main() -> int:
             args.clip_seconds, args.sample_rate)
         real_duration = _prepare_clip(
             real_source, real_destination, args.clip_seconds, args.sample_rate)
+        generated_destination.chmod(0o600)
+        real_destination.chmod(0o600)
 
         public_cases.append({
             "case_id": case_id,
@@ -230,6 +235,7 @@ def main() -> int:
     }
     public_path = output_dir / "public_manifest.json"
     _atomic_json(public_path, public_manifest)
+    public_path.chmod(0o600)
     generated_manifest = generated_dir / "audio_manifest.json"
     private_manifest = {
         "result_schema": "genplaylist-listener-study-private-v1",
@@ -261,7 +267,9 @@ def main() -> int:
         },
         "cases": private_cases,
     }
-    _atomic_json(output_dir / "private_manifest.json", private_manifest)
+    private_path = output_dir / "private_manifest.json"
+    _atomic_json(private_path, private_manifest)
+    private_path.chmod(0o600)
     print(json.dumps(private_manifest["selection"], sort_keys=True))
     return 0
 
