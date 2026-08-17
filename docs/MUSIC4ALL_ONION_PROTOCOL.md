@@ -122,7 +122,8 @@ training examples, or about 44.2 passes over the capped training set.
 | Test split | `cca5ce769ef87624a8dcf025cdc60efd9233b7043822d320ae976c53a1550652` |
 | Gap audit | `46bb40b479bb6ec53a381146f401a846df469b3182298d26118db965dfc98d59` |
 | Dataset materialization manifest | `c8849643be4388f513b66a4c956227669f7b05a48f022e28d383f665d929b885` |
-| WP-C prepared manifest | `cbf94e313ea21b98915ebc455edea2e4ef2e74b65af010cd6426aa044468fa11` |
+| WP-C prepared manifest (8 cues, primary) | `cbf94e313ea21b98915ebc455edea2e4ef2e74b65af010cd6426aa044468fa11` |
+| WP-C prepared manifest (0 cues, ablation) | `cb5556dcce1bd83555e63edeb651c6fbc1937ddf9f78db64ecf1cb033f412644` |
 
 ## Reproducible commands
 
@@ -174,6 +175,11 @@ conda run -n music python scripts/validate_wp_c_prepared_data.py \
   --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
   --active-cues 8
 ```
+
+The 0-cue component ablation uses the same split, windows, catalog tokens, and
+targets. Re-run the two WP-C preparation commands above with `--active-cues 0`
+and output/prepared directory
+`genplaylist-music4all-onion-v1-0cue-k5-u8-u3-cap16`.
 
 The training/evaluation runners keep their historical filenames but select the
 Music4All Hydra data configuration explicitly:
