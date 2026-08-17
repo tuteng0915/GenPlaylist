@@ -152,6 +152,9 @@ def download(
         raise ValueError(
             f"Music4All-Onion checksum mismatch: {actual_md5} != {expected_md5}")
     os.replace(temporary, output)
+    for index, _ in enumerate(ranges):
+        (parts_dir / f"part-{index:03d}.bin").unlink()
+    parts_dir.rmdir()
     print(f"verified {output} (md5={actual_md5})")
 
 

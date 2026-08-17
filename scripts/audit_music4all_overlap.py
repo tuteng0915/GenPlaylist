@@ -140,22 +140,29 @@ def _interaction_stats(path: Path, mapped_ids: set[str]) -> dict:
     current_streak = 0
     departed_users: set[str] = set()
     grouped_by_user = True
-    timestamp_reversals = 0
+    timestamp_increases = 0
+    timestamp_decreases = 0
     previous_timestamp = None
 
     with bz2.open(path, mode="rt", encoding="utf-8", newline="") as handle:
-        rows = csv.DictReader(handle, delimiter="\t")
+        header = handle.readline().rstrip("\r\n").split("\t")
         required = {"user_id", "track_id", "timestamp"}
-        if rows.fieldnames is None or not required.issubset(rows.fieldnames):
+        if not required.issubset(header):
             raise ValueError(
                 f"Music4All interactions need columns {sorted(required)}, "
-                f"got {rows.fieldnames}"
+                f"got {header}"
             )
-        for row in rows:
+        user_column = header.index("user_id")
+        track_column = header.index("track_id")
+        timestamp_column = header.index("timestamp")
+        for line in handle:
+            fields = line.rstrip("\r\n").split("\t")
+            if len(fields) != len(header):
+                raise ValueError(f"Malformed Music4All interaction row {total_events + 2}")
             total_events += 1
-            user_id = str(row["user_id"])
-            track_id = str(row["track_id"])
-            timestamp = int(row["timestamp"])
+            user_id = fields[user_column]
+            track_id = fields[track_column]
+            timestamp = fields[timestamp_column]
             users.add(user_id)
             if user_id != current_user:
                 if current_user is not None:
@@ -165,8 +172,9 @@ def _interaction_stats(path: Path, mapped_ids: set[str]) -> dict:
                 current_user = user_id
                 current_streak = 0
                 previous_timestamp = None
-            if previous_timestamp is not None and timestamp < previous_timestamp:
-                timestamp_reversals += 1
+            if previous_timestamp is not None:
+                timestamp_increases += timestamp > previous_timestamp
+                timestamp_decreases += timestamp < previous_timestamp
             previous_timestamp = timestamp
             if track_id in mapped_ids:
                 mapped_events += 1
@@ -195,7 +203,14 @@ def _interaction_stats(path: Path, mapped_ids: set[str]) -> dict:
         "contiguous_supported_length20_windows": contiguous_windows,
         "users_with_contiguous_supported_window": len(users_with_contiguous_window),
         "rows_grouped_by_user": grouped_by_user,
-        "within_user_timestamp_reversals": timestamp_reversals,
+        "within_user_timestamp_increases": timestamp_increases,
+        "within_user_timestamp_decreases": timestamp_decreases,
+        "timestamp_order": (
+            "descending" if timestamp_decreases and not timestamp_increases
+            else "ascending" if timestamp_increases and not timestamp_decreases
+            else "constant" if not timestamp_increases and not timestamp_decreases
+            else "mixed"
+        ),
         "interpretation": {
             "filtered_subsequence": (
                 "unmatched Music4All items are omitted before rolling length-20 windows"

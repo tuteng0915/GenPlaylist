@@ -41,10 +41,10 @@ def test_interaction_stats_distinguish_filtered_and_contiguous_windows() -> None
         path = Path(directory) / "events.tsv.bz2"
         rows = ["user_id\ttrack_id\ttimestamp\n"]
         for index in range(10):
-            rows.append(f"u\tm\t{index}\n")
-        rows.append("u\tx\t10\n")
+            rows.append(f"u\tm\t2026-01-01 00:00:{index:02d}\n")
+        rows.append("u\tx\t2026-01-01 00:00:10\n")
         for index in range(11, 22):
-            rows.append(f"u\tm\t{index}\n")
+            rows.append(f"u\tm\t2026-01-01 00:00:{index:02d}\n")
         with bz2.open(path, "wt", encoding="utf-8") as handle:
             handle.writelines(rows)
         result = MODULE._interaction_stats(path, {"m"})
@@ -52,6 +52,7 @@ def test_interaction_stats_distinguish_filtered_and_contiguous_windows() -> None
         assert result["filtered_subsequence_length20_windows"] == 2
         assert result["contiguous_supported_length20_windows"] == 0
         assert result["rows_grouped_by_user"] is True
+        assert result["timestamp_order"] == "ascending"
 
 
 if __name__ == "__main__":
