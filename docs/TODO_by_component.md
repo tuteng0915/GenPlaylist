@@ -75,5 +75,18 @@ not authorize WP-D demo code or UI changes.
 - [x] Freeze current-protocol listener-study case preparation and participant-level analysis.
 - [x] Run the full backbone -> verbalization -> ACE-Step path and validate generated audio.
 
+## Music4All-Onion sequential revision
+
+- [x] Select and freeze Music4All-Onion as the primary sequential-listening dataset.
+- [x] Download and checksum the 252,984,396-event timestamp table.
+- [x] Audit conservative overlap with the frozen 5,119-track MPD catalog.
+- [ ] Manually audit the 155 version-normalized matches; keep strict matches as primary meanwhile.
+- [ ] Stable-sort events within user and build strict contiguous 15->5 windows.
+- [ ] Freeze a user-disjoint split and per-user training-window cap.
+- [ ] Update proxy evaluators to retain repeated listens and restrict retrieval to the mapped catalog.
+- [ ] Retrain DDBC-SFT and GenPlaylist on the sequential windows and rerun baselines.
+- [ ] Regenerate the Music4All end-to-end audio suite and automatic metrics.
+- [ ] Update the paper so Music4All is primary and MPD is the playlist-proxy comparison.
+
 Server-only steps and expected artifact locations are documented in
 [`SERVER_MIGRATION.md`](SERVER_MIGRATION.md).
