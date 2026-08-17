@@ -43,17 +43,23 @@ def _retrieve_topk(
     catalog_embeddings_l2: np.ndarray,
     *,
     topk: int,
+    exclude_visible: bool = True,
 ) -> np.ndarray:
     reference_rows = np.asarray(reference_rows, dtype=np.int64)
     catalog_embeddings_l2 = np.asarray(catalog_embeddings_l2, dtype=np.float32)
     if reference_rows.ndim != 2 or catalog_embeddings_l2.ndim != 2:
         raise ValueError("Reference rows and catalog embeddings must both be matrices")
-    if topk <= 0 or topk > len(catalog_embeddings_l2) - reference_rows.shape[1]:
-        raise ValueError("Invalid top-k after excluding visible reference items")
+    available = (
+        len(catalog_embeddings_l2) - reference_rows.shape[1]
+        if exclude_visible else len(catalog_embeddings_l2)
+    )
+    if topk <= 0 or topk > available:
+        raise ValueError("Invalid top-k for the configured catalog policy")
     query = _l2_normalize(catalog_embeddings_l2[reference_rows].mean(axis=1))
     scores = query @ catalog_embeddings_l2.T
-    for index, rows in enumerate(reference_rows):
-        scores[index, rows] = -np.inf
+    if exclude_visible:
+        for index, rows in enumerate(reference_rows):
+            scores[index, rows] = -np.inf
     # Stable full sorting gives a deterministic catalog-row tie break.
     return np.argsort(-scores, axis=1, kind="stable")[:, :topk]
 
@@ -62,6 +68,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--allow-visible-items", action="store_true",
+        help="Permit predictions that repeat a reference listen.")
     return parser.parse_args()
 
 
@@ -77,14 +86,18 @@ def main() -> int:
     item_ids = [
         str(item_id) for item_id in json.loads(
             (vectors / "catalog_item_ids.json").read_text(encoding="utf-8"))]
-    if reference_rows.shape != (941, 15) or target_rows.shape != (941, 5):
+    if (
+        reference_rows.ndim != 2 or reference_rows.shape[1] != 15
+        or target_rows.shape != (len(reference_rows), 5)
+    ):
         raise ValueError(
-            f"Frozen evaluation row shapes drifted: {reference_rows.shape}, {target_rows.shape}")
+            f"Evaluation row shapes drifted: {reference_rows.shape}, {target_rows.shape}")
     if len(item_ids) != len(catalog_embeddings_l2):
         raise ValueError("Catalog IDs and CLHE embedding rows differ")
 
     prediction_rows = _retrieve_topk(
-        reference_rows, catalog_embeddings_l2, topk=5)
+        reference_rows, catalog_embeddings_l2, topk=5,
+        exclude_visible=not args.allow_visible_items)
     id_array = np.asarray(item_ids, dtype=object)
     prediction_ids = id_array[prediction_rows]
     target_ids = id_array[target_rows]
@@ -111,7 +124,7 @@ def main() -> int:
             "reference_items": 15,
             "generated_items": 5,
             "catalog_items": len(item_ids),
-            "visible_items_excluded": True,
+            "visible_items_excluded": not args.allow_visible_items,
             "query": "L2-normalized mean of fifteen CLHE catalog embeddings",
             "ranking": "exact cosine top-five with stable catalog-row tie break",
         },

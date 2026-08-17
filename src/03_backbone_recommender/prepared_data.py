@@ -24,6 +24,22 @@ PREPARATION_CODE_FILES = (
 )
 
 
+def expected_split_counts(dataset=None) -> dict[str, int]:
+    """Return dataset-specific frozen counts, with MPD as the legacy default."""
+    if dataset is None:
+        return dict(EXPECTED_SPLIT_COUNTS)
+    configured = dataset.dataset_card.get("wp_c_split_counts")
+    if configured is None:
+        return dict(EXPECTED_SPLIT_COUNTS)
+    if not isinstance(configured, dict) or set(configured) != {"train", "test"}:
+        raise ValueError(
+            "dataset_card.wp_c_split_counts must contain exactly train and test")
+    counts = {name: int(value) for name, value in configured.items()}
+    if any(value <= 0 for value in counts.values()):
+        raise ValueError("WP-C train/test counts must both be positive")
+    return counts
+
+
 def preparation_code_manifest(repo_root: str | Path | None = None) -> dict:
     """Hash the code and config whose behavior defines the offline cache."""
     root = (
@@ -101,7 +117,7 @@ def source_manifest(paths: dict[str, Path]) -> dict:
     return output
 
 
-def validate_prepared_manifest(manifest: dict, config, tokenizer) -> None:
+def validate_prepared_manifest(manifest: dict, config, tokenizer, dataset=None) -> None:
     """Validate protocol/layout/count metadata before loading Arrow files."""
     FROZEN_NEXT_SONG_PROTOCOL.validate_config(config)
     if manifest.get("prepared_data_version") != PREPARED_DATA_VERSION:
@@ -110,7 +126,8 @@ def validate_prepared_manifest(manifest: dict, config, tokenizer) -> None:
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(
             f"Prepared schema mismatch: {manifest.get('schema_version')!r}")
-    if manifest.get("split_counts") != EXPECTED_SPLIT_COUNTS:
+    expected_counts = expected_split_counts(dataset)
+    if manifest.get("split_counts") != expected_counts:
         raise ValueError(
             f"Prepared split counts drifted: {manifest.get('split_counts')}")
     expected_layout = {
@@ -135,7 +152,7 @@ def load_prepared_tokenized_dataset(root: str | Path, config, dataset, tokenizer
             f"Prepared dataset manifest not found: {manifest_path}. "
             "Run scripts/prepare_wp_c_data.py first.")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    validate_prepared_manifest(manifest, config, tokenizer)
+    validate_prepared_manifest(manifest, config, tokenizer, dataset)
     validate_preparation_code(manifest)
 
     current_sources = source_manifest(configured_source_paths(config, dataset))
@@ -150,7 +167,8 @@ def load_prepared_tokenized_dataset(root: str | Path, config, dataset, tokenizer
 
     tokenized = load_from_disk(str(root / "tokenized_dataset"))
     actual_counts = {split: len(tokenized[split]) for split in tokenized}
-    if actual_counts != EXPECTED_SPLIT_COUNTS:
+    expected_counts = expected_split_counts(dataset)
+    if actual_counts != expected_counts:
         raise ValueError(f"Prepared Arrow split counts drifted: {actual_counts}")
     for split in tokenized:
         tokenized[split].set_format(type="torch")

@@ -29,6 +29,17 @@ def test_visible_rows_are_excluded_and_ties_are_stable():
     assert rows.tolist() == [[2, 3]]
 
 
+def test_visible_rows_can_be_retrieved_for_listening_history():
+    catalog = MODULE._l2_normalize(np.asarray([
+        [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0],
+    ], dtype=np.float32))
+    rows = MODULE._retrieve_topk(
+        np.asarray([[0, 0]], dtype=np.int64), catalog, topk=1,
+        exclude_visible=False)
+    assert rows.tolist() == [[0]]
+
+
 if __name__ == "__main__":
     test_visible_rows_are_excluded_and_ties_are_stable()
+    test_visible_rows_can_be_retrieved_for_listening_history()
     print("  PASS  test_visible_rows_are_excluded_and_ties_are_stable")

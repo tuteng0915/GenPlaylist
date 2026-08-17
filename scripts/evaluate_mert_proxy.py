@@ -23,7 +23,6 @@ from many_to_many_metrics import calculate_many_to_many_metrics  # noqa: E402
 from shared.artifacts import sha256_file  # noqa: E402
 
 
-EXPECTED_TEST_EXAMPLES = 941
 EXPECTED_ITEMS = 5
 
 
@@ -142,7 +141,12 @@ def main() -> int:
             values, samples=args.bootstrap_samples, seed=args.bootstrap_seed)
         for name, values in per_history.items()
     }
-    official = prediction_ids.shape == (EXPECTED_TEST_EXAMPLES, EXPECTED_ITEMS)
+    declared_examples = prediction_payload.get("evaluation", {}).get("test_examples")
+    official = (
+        prediction_ids.ndim == 2
+        and prediction_ids.shape[1] == EXPECTED_ITEMS
+        and declared_examples == prediction_ids.shape[0]
+    )
     payload = {
         "result_schema": "genplaylist-mert-proxy-eval-v1",
         "created_utc": datetime.now(timezone.utc).isoformat(),

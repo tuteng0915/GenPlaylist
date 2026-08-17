@@ -52,7 +52,30 @@ def test_rollout_shape_range_and_seen_exclusion():
         assert not set(references_one_based).intersection(prediction_one_based.tolist())
 
 
+def test_rollout_can_repeat_visible_items():
+    class FixedModel:
+        max_length = 19
+
+        def eval(self):
+            return self
+
+        def encode(self, inputs):
+            return torch.zeros((*inputs.shape, 2), dtype=torch.float32)
+
+        def catalog_logits(self, hidden):
+            scores = torch.zeros((len(hidden), 24), dtype=torch.float32)
+            scores[:, 0] = 1.0
+            return scores
+
+    references = np.asarray([list(range(1, 16))], dtype=np.int64)
+    predicted = MODULE._autoregressive_topk(
+        FixedModel(), references, batch_size=1, device=torch.device("cpu"),
+        exclude_seen=False)
+    assert predicted.tolist() == [[0, 0, 0, 0, 0]]
+
+
 if __name__ == "__main__":
     test_training_loss_covers_exactly_five_transitions()
     test_rollout_shape_range_and_seen_exclusion()
+    test_rollout_can_repeat_visible_items()
     print("  PASS  SASRec protocol tests")

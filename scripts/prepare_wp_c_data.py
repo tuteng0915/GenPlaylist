@@ -25,9 +25,9 @@ from dataset import AbstractDataset  # noqa: E402
 from config_composition import compose_wp_c_config  # noqa: E402
 from genplaylist_tokenizer import GenPlaylistTokenizer  # noqa: E402
 from prepared_data import (  # noqa: E402
-    EXPECTED_SPLIT_COUNTS,
     PREPARED_DATA_VERSION,
     configured_source_paths,
+    expected_split_counts,
     preparation_code_manifest,
     source_manifest,
 )
@@ -270,7 +270,8 @@ def main() -> int:
 
         dataset = AbstractDataset(config)
         counts = {split: len(rows) for split, rows in dataset.split_data.items()}
-        if counts != EXPECTED_SPLIT_COUNTS:
+        expected_counts = expected_split_counts(dataset)
+        if counts != expected_counts:
             raise ValueError(f"Frozen split counts changed: {counts}")
         tokenizer = GenPlaylistTokenizer.from_dataset_config(config, dataset)
 

@@ -20,7 +20,7 @@ from dataset import AbstractDataset  # noqa: E402
 from config_composition import compose_wp_c_config  # noqa: E402
 from genplaylist_tokenizer import GenPlaylistTokenizer  # noqa: E402
 from prepared_data import (  # noqa: E402
-    EXPECTED_SPLIT_COUNTS,
+    expected_split_counts,
     load_prepared_tokenized_dataset,
 )
 from shared.artifacts import sha256_file  # noqa: E402
@@ -81,15 +81,15 @@ def _validate_output_hashes(root: Path, manifest: dict) -> None:
             raise ValueError(f"Prepared output hash mismatch: {relative}")
 
 
-def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
+def _validate_arrow(root: Path, dataset, tokenizer, tokenized, expected_counts: dict) -> None:
     from datasets import Dataset, load_from_disk
 
     raw = load_from_disk(str(root / "raw_dataset"))
     raw_counts = {split: len(raw[split]) for split in raw}
-    if raw_counts != EXPECTED_SPLIT_COUNTS:
+    if raw_counts != expected_counts:
         raise ValueError(f"Raw Arrow split counts drifted: {raw_counts}")
 
-    for split, count in EXPECTED_SPLIT_COUNTS.items():
+    for split, count in expected_counts.items():
         indices = sorted({0, count // 2, count - 1})
         source_rows = []
         for index in indices:
@@ -115,7 +115,7 @@ def _validate_arrow(root: Path, dataset, tokenizer, tokenized) -> None:
                 else:
                     _assert_array_equal(right, left, f"tokenized {split}[{source_index}].{field}")
 
-    train_count = EXPECTED_SPLIT_COUNTS["train"]
+    train_count = expected_counts["train"]
     train_examples = [
         tokenized["train"][index] for index in (0, train_count // 2, train_count - 1)]
     train_batch = tokenizer.collate_batch(train_examples)
@@ -153,7 +153,9 @@ def _load_vector(vector_dir: Path, manifest: dict, name: str):
     return array
 
 
-def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
+def _validate_vectors(
+    root: Path, manifest: dict, dataset, tokenizer, expected_counts: dict,
+) -> None:
     vector_dir = root / "vectors"
     row_to_item = json.loads((vector_dir / "catalog_item_ids.json").read_text("utf-8"))
     expected_items = [None] * len(tokenizer.item_id_to_row)
@@ -258,7 +260,7 @@ def _validate_vectors(root: Path, manifest: dict, dataset, tokenizer) -> None:
     context_ids = _load_vector(vector_dir, manifest, "eval_context_input_ids.npy")
     completion_ids = _load_vector(vector_dir, manifest, "eval_completion_input_ids.npy")
     completion_mask = _load_vector(vector_dir, manifest, "eval_completion_mask.npy")
-    expected_test = EXPECTED_SPLIT_COUNTS["test"]
+    expected_test = expected_counts["test"]
     context_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
         tokenizer.tokens_per_item, items=FROZEN_NEXT_SONG_PROTOCOL.eval_reference_items)
     completion_length = FROZEN_NEXT_SONG_PROTOCOL.model_token_length(
@@ -308,13 +310,14 @@ def main() -> int:
     root = args.prepared_dir.expanduser().resolve()
     config = _configure(args)
     dataset = AbstractDataset(config)
+    expected_counts = expected_split_counts(dataset)
     tokenizer = GenPlaylistTokenizer.from_dataset_config(config, dataset)
     tokenized, manifest = load_prepared_tokenized_dataset(root, config, dataset, tokenizer)
     if manifest.get("git_dirty") is not False:
         raise ValueError(f"Release cache must have git_dirty=false, got {manifest.get('git_dirty')}")
     _validate_output_hashes(root, manifest)
-    _validate_arrow(root, dataset, tokenizer, tokenized)
-    _validate_vectors(root, manifest, dataset, tokenizer)
+    _validate_arrow(root, dataset, tokenizer, tokenized, expected_counts)
+    _validate_vectors(root, manifest, dataset, tokenizer, expected_counts)
     print(json.dumps({
         "status": "ok",
         "prepared_dir": str(root),

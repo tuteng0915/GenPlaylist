@@ -5,6 +5,7 @@ from __future__ import annotations
 from prepared_data import (
     EXPECTED_SPLIT_COUNTS,
     PREPARED_DATA_VERSION,
+    expected_split_counts,
     validate_prepared_manifest,
 )
 from shared.schema import SCHEMA_VERSION, TOKEN_LAYOUT
@@ -12,6 +13,10 @@ from shared.schema import SCHEMA_VERSION, TOKEN_LAYOUT
 
 class FakeTokenizer:
     tokens_per_item = TOKEN_LAYOUT.tokens_per_item
+
+
+class FakeDataset:
+    dataset_card = {"wp_c_split_counts": {"train": 231422, "test": 4725}}
 
 
 def valid_manifest():
@@ -45,6 +50,14 @@ def test_wrong_split_count_is_rejected():
         assert "split counts drifted" in str(exc)
     else:
         raise AssertionError("Expected drifting prepared split counts to fail")
+
+
+def test_dataset_specific_counts_are_supported():
+    dataset = FakeDataset()
+    manifest = valid_manifest()
+    manifest["split_counts"] = expected_split_counts(dataset)
+    validate_prepared_manifest(
+        manifest, {"seq_len": 20, "protocol": {}}, FakeTokenizer(), dataset)
 
 
 if __name__ == "__main__":

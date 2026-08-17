@@ -3,9 +3,10 @@
 
 The model receives the first fifteen catalog items and predicts items 16--20
 autoregressively.  During training, the five target transitions are optimized
-with teacher forcing and full-catalog cross entropy.  Evaluation greedily
-selects five unseen catalog items and persists their IDs for the common MERT
-postprocessor.
+with teacher forcing and full-catalog cross entropy. Evaluation greedily emits
+five catalog items for the common MERT postprocessor. Playlist evaluation
+excludes seen items by default; sequential listening evaluation can retain
+repeats.
 """
 
 from __future__ import annotations
@@ -191,6 +192,9 @@ def _load_sequences(
     except ImportError as error:
         raise RuntimeError("The datasets package is required for SASRec training") from error
     dataset = load_from_disk(str(prepared_dir / "raw_dataset"))
+    manifest = json.loads(
+        (prepared_dir / "prepared_manifest.json").read_text(encoding="utf-8"))
+    expected_counts = manifest.get("split_counts", {})
     output = []
     for split in ("train", "test"):
         rows = dataset[split]["item_seq"]
@@ -203,8 +207,10 @@ def _load_sequences(
             [item_to_index[str(item)] + 1 for item in row] for row in rows
         ], dtype=np.int64))
     train, test = output
-    if test.shape != (941, SEQUENCE_ITEMS):
-        raise ValueError(f"Frozen test shape drifted: {test.shape}")
+    actual_counts = {"train": len(train), "test": len(test)}
+    if actual_counts != expected_counts:
+        raise ValueError(
+            f"Prepared split counts drifted: {actual_counts} != {expected_counts}")
     return train, test
 
 
@@ -228,8 +234,9 @@ def _autoregressive_topk(
     *,
     batch_size: int,
     device: torch.device,
+    exclude_seen: bool = True,
 ) -> np.ndarray:
-    """Greedily generate five items, excluding visible and prior predictions."""
+    """Greedily generate five items under the configured repeat policy."""
     reference_indices = np.asarray(reference_indices, dtype=np.int64)
     if reference_indices.ndim != 2 or reference_indices.shape[1] != REFERENCE_ITEMS:
         raise ValueError(f"Expected [examples, 15], got {reference_indices.shape}")
@@ -246,9 +253,10 @@ def _autoregressive_topk(
             encoded = model.encode(inputs)
             hidden = encoded[:, prefix.shape[1] - 1]
             scores = model.catalog_logits(hidden)
-            seen = torch.zeros_like(scores, dtype=torch.bool)
-            seen.scatter_(1, prefix - 1, True)
-            scores.masked_fill_(seen, -torch.inf)
+            if exclude_seen:
+                seen = torch.zeros_like(scores, dtype=torch.bool)
+                seen.scatter_(1, prefix - 1, True)
+                scores.masked_fill_(seen, -torch.inf)
             selected = scores.argmax(dim=1) + 1
             generated.append(selected)
             prefix = torch.cat([prefix, selected.unsqueeze(1)], dim=1)
@@ -283,6 +291,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--allow-repeats", action="store_true",
+        help="Permit visible and previously generated items at evaluation time.")
     parser.add_argument("--save-every", type=int, default=500)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--max-train-examples", type=int, default=None)
@@ -412,6 +423,7 @@ def main() -> int:
         reference_indices + 1,
         batch_size=args.eval_batch_size,
         device=device,
+        exclude_seen=not args.allow_repeats,
     )
     catalog_embeddings_l2 = np.load(
         vectors / "catalog_embeddings_l2.npy", allow_pickle=False).astype(np.float32)
@@ -463,7 +475,7 @@ def main() -> int:
             "generated_items": TARGET_ITEMS,
             "catalog_items": len(item_ids),
             "generation": "greedy autoregressive",
-            "visible_and_generated_items_excluded": True,
+            "visible_and_generated_items_excluded": not args.allow_repeats,
         },
         "metrics_clhe_diagnostic": metrics,
         "predictions": {

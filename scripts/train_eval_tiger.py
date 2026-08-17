@@ -3,9 +3,10 @@
 
 This implementation follows TIGER's T5 encoder-decoder formulation and consumes
 the already-frozen DDBC/RQ semantic IDs (three residual codes plus one collision
-code).  Each update samples next-item transitions from positions 16--20.  At
-test time, constrained beam search produces five valid, unseen catalog items
-autoregressively and saves their IDs for the common MERT evaluator.
+code). Each update samples next-item transitions from positions 16--20. At test
+time, constrained beam search produces five valid catalog items for the common
+MERT evaluator. Playlist evaluation excludes seen items by default; sequential
+listening evaluation can retain repeats.
 """
 
 from __future__ import annotations
@@ -81,6 +82,9 @@ def _load_row_sequences(
     except ImportError as error:
         raise RuntimeError("The datasets package is required for TIGER training") from error
     dataset = load_from_disk(str(prepared_dir / "raw_dataset"))
+    manifest = json.loads(
+        (prepared_dir / "prepared_manifest.json").read_text(encoding="utf-8"))
+    expected_counts = manifest.get("split_counts", {})
     output = []
     for split in ("train", "test"):
         item_sequences = dataset[split]["item_seq"]
@@ -95,8 +99,10 @@ def _load_row_sequences(
             for sequence in item_sequences
         ], dtype=np.int64))
     train, test = output
-    if test.shape != (941, SEQUENCE_ITEMS):
-        raise ValueError(f"Frozen test shape drifted: {test.shape}")
+    actual_counts = {"train": len(train), "test": len(test)}
+    if actual_counts != expected_counts:
+        raise ValueError(
+            f"Prepared split counts drifted: {actual_counts} != {expected_counts}")
     return train, test
 
 
@@ -150,7 +156,7 @@ def _make_training_batch(
 
 
 class SemanticTrie:
-    """Prefix index used to constrain every decoded ID to an unseen item."""
+    """Prefix index used to constrain every decoded ID to a catalog item."""
 
     def __init__(self, semantic_tokens: np.ndarray) -> None:
         semantic_tokens = np.asarray(semantic_tokens, dtype=np.int64)
@@ -219,6 +225,7 @@ def _generate_next_rows(
     beam_size: int,
     batch_size: int,
     device: torch.device,
+    exclude_history: bool = True,
 ) -> np.ndarray:
     history_rows = np.asarray(history_rows, dtype=np.int64)
     output_rows = []
@@ -228,7 +235,10 @@ def _generate_next_rows(
         flat = semantic_tokens[rows].reshape(len(rows), -1)
         inputs = torch.as_tensor(flat, dtype=torch.long, device=device)
         attention = torch.ones_like(inputs)
-        excluded = [set(map(int, values)) for values in rows]
+        excluded = [
+            set(map(int, values)) if exclude_history else set()
+            for values in rows
+        ]
 
         def allowed_tokens(batch_id: int, decoder_ids: torch.Tensor) -> list[int]:
             values = decoder_ids.tolist()
@@ -255,7 +265,8 @@ def _generate_next_rows(
             ], dtype=np.int64)
         except KeyError as error:
             raise ValueError(f"Constrained TIGER emitted invalid ID {error.args[0]}") from error
-        if any(row in blocked for row, blocked in zip(decoded, excluded)):
+        if exclude_history and any(
+                row in blocked for row, blocked in zip(decoded, excluded)):
             raise ValueError("Constrained TIGER emitted a visible item")
         output_rows.append(decoded)
     return np.concatenate(output_rows)
@@ -271,6 +282,7 @@ def _autoregressive_five(
     beam_size: int,
     batch_size: int,
     device: torch.device,
+    exclude_history: bool = True,
 ) -> np.ndarray:
     histories = np.asarray(reference_rows, dtype=np.int64)
     predictions = []
@@ -283,6 +295,7 @@ def _autoregressive_five(
             beam_size=beam_size,
             batch_size=batch_size,
             device=device,
+            exclude_history=exclude_history,
         )
         predictions.append(selected)
         histories = np.concatenate([histories, selected[:, None]], axis=1)
@@ -319,6 +332,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-train-examples", type=int, default=None)
     parser.add_argument("--max-eval-examples", type=int, default=None)
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument(
+        "--allow-repeats", action="store_true",
+        help="Permit visible and previously generated items at evaluation time.")
     return parser.parse_args()
 
 
@@ -461,6 +477,7 @@ def main() -> int:
         beam_size=args.beam_size,
         batch_size=args.eval_batch_size,
         device=device,
+        exclude_history=not args.allow_repeats,
     )
     catalog_embeddings_l2 = np.load(
         vectors / "catalog_embeddings_l2.npy", allow_pickle=False).astype(np.float32)
@@ -518,7 +535,7 @@ def main() -> int:
             "catalog_items": len(item_ids),
             "generation": "autoregressive constrained beam search",
             "beam_size": args.beam_size,
-            "visible_and_generated_items_excluded": True,
+            "visible_and_generated_items_excluded": not args.allow_repeats,
         },
         "metrics_clhe_diagnostic": metrics,
         "predictions": {
