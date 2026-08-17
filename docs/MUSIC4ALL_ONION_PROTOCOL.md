@@ -174,3 +174,14 @@ conda run -n music python scripts/validate_wp_c_prepared_data.py \
   --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
   --active-cues 8
 ```
+
+The training/evaluation runners keep their historical filenames but select the
+Music4All Hydra data configuration explicitly:
+
+```bash
+export GENPLAYLIST_DATA_CONFIG=music4all
+export GENPLAYLIST_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1
+export GENPLAYLIST_ARTIFACT_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
+export GENPLAYLIST_PREPARED_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16
+bash src/03_backbone_recommender/scripts/train_spotify.sh
+```

@@ -1,0 +1,6 @@
+train: music4all
+test: test.txt
+tokenizer_name_or_path: GenPlaylistTokenizer
+cache_dir: null
+wrap: true
+streaming: false

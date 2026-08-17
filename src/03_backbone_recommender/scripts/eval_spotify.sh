@@ -9,6 +9,7 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export PYTHONPATH="$WP_ROOT:${PYTHONPATH:-}"
 
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
+DATA_CONFIG="${GENPLAYLIST_DATA_CONFIG:-spotify}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
 DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v4-8cue-20item-joint-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
@@ -73,7 +74,7 @@ cd "$WP_ROOT"
 python main.py \
   mode=rec_eval \
   model="$MODEL_SIZE" \
-  data=spotify \
+  data="$DATA_CONFIG" \
   data_root="$DATA_ROOT" \
   catalog_embeddings_path="$ARTIFACT_ROOT/catalog_item_embeddings.npy" \
   item_id_to_row_path="$ARTIFACT_ROOT/item_id_to_row.json" \
@@ -96,6 +97,6 @@ python main.py \
   sampling.steps="$SAMPLING_STEPS" \
   parameterization=subs \
   eval.compute_generative_perplexity=false \
-  +run_name="genplaylist-v4-${ACTIVE_CUES}cue-structure${STRUCTURE_CONDITIONING}-joint15to5-official-eval-${STAMP}"
+  +run_name="genplaylist-v4-${DATA_CONFIG}-${ACTIVE_CUES}cue-structure${STRUCTURE_CONDITIONING}-joint15to5-official-eval-${STAMP}"
 
 echo "Official WP-C result: $RESULTS_PATH"

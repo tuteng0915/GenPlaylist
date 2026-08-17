@@ -8,6 +8,7 @@ export PYTHONPATH="$WP_ROOT:${PYTHONPATH:-}"
 
 REPO_ROOT="$(cd "$WP_ROOT/../.." && pwd)"
 TRAIN_MODE="${GENPLAYLIST_TRAIN_MODE:-warmstart}"
+DATA_CONFIG="${GENPLAYLIST_DATA_CONFIG:-spotify}"
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
 WARMSTART_CKPT="${GENPLAYLIST_WARMSTART_CKPT:-$REPO_ROOT/checkpoints/pretrained/ddbc/spotify30.ckpt}"
@@ -93,7 +94,7 @@ case "$TRAIN_MODE" in
 esac
 
 # Generate unique run name with timestamp to avoid conflicts
-RUN_NAME="genplaylist-v4-spotify-joint15to5-${ACTIVE_CUES}cue-${STRUCTURE_VARIANT}-${LOSS_VARIANT}-$(date +%Y%m%d-%H%M%S)"
+RUN_NAME="genplaylist-v4-${DATA_CONFIG}-joint15to5-${ACTIVE_CUES}cue-${STRUCTURE_VARIANT}-${LOSS_VARIANT}-$(date +%Y%m%d-%H%M%S)"
 
 cd "$WP_ROOT"
 python main.py \
@@ -101,7 +102,7 @@ python main.py \
   loader.batch_size="$TRAIN_BATCH_SIZE" \
   loader.eval_batch_size=128 \
   model="$MODEL_SIZE" \
-  data=spotify \
+  data="$DATA_CONFIG" \
   data_root="$DATA_ROOT" \
   catalog_embeddings_path="$ARTIFACT_ROOT/catalog_item_embeddings.npy" \
   item_id_to_row_path="$ARTIFACT_ROOT/item_id_to_row.json" \
