@@ -80,10 +80,11 @@ not authorize WP-D demo code or UI changes.
 - [x] Select and freeze Music4All-Onion as the primary sequential-listening dataset.
 - [x] Download and checksum the 252,984,396-event timestamp table.
 - [x] Audit conservative overlap with the frozen 5,119-track MPD catalog.
-- [ ] Manually audit the 155 version-normalized matches; keep strict matches as primary meanwhile.
-- [ ] Stable-sort events within user and build strict contiguous 15->5 windows.
-- [ ] Freeze a user-disjoint split and per-user training-window cap.
-- [ ] Update proxy evaluators to retain repeated listens and restrict retrieval to the mapped catalog.
+- [ ] Manually audit the 155 version-normalized matches; strict matches remain primary meanwhile.
+- [x] Stable-sort events within user and audit strict/bounded catalog projections.
+- [x] Freeze the bounded-gap, diversity-filtered, user-disjoint 15->5 split and cap=16.
+- [x] Update proxy evaluators to retain repeated listens and multiset exact matching.
+- [x] Prepare and exhaustively validate the Music4All WP-C Arrow cache and vectors.
 - [ ] Retrain DDBC-SFT and GenPlaylist on the sequential windows and rerun baselines.
 - [ ] Regenerate the Music4All end-to-end audio suite and automatic metrics.
 - [ ] Update the paper so Music4All is primary and MPD is the playlist-proxy comparison.

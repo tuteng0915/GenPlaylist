@@ -8,7 +8,9 @@ initialization, and an external comparison; it is no longer the only evidence
 for history-conditioned preference modeling.
 
 The sequential experiment uses only Music4All tracks that can be mapped
-conservatively to the frozen 5,119-item GenPlaylist catalog. This preserves the
+conservatively to the frozen 5,119-item GenPlaylist catalog. The primary run
+uses the 2,754 strict one-to-one matches; the 155 version-normalized matches
+remain excluded pending manual audit. This preserves the
 existing 64-dimensional CLHE table, three-level RVQ tokenizer, 2,048-entry cue
 vocabulary, eight-cue item layout, catalog audio, and WP-D adapter. The DDBC
 backbone must nevertheless be fine-tuned again on the new chronological
@@ -74,36 +76,53 @@ timestamp before constructing any window.
 
 ## Primary sequence definition
 
-The primary setting uses strict one-to-one matches only. After sorting every
-user chronologically, an unsupported Music4All event breaks the run. Rolling
-windows are created only inside supported runs of at least 20 adjacent events:
-15 visible reference listens followed by five future listens. This retains the
-meaning of an immediate sequential continuation and does not silently join
-events across missing catalog items.
+Every user is stable-sorted by timestamp, with the original source row breaking
+timestamp ties. The primary setting is a bounded catalog projection: two
+adjacent mapped listens may have at most five unsupported events between them;
+a larger gap breaks the run. This avoids claiming that filtered events are
+literally adjacent while retaining substantially more representative histories
+than strict zero-gap matching.
 
-A secondary scale analysis may remove unsupported events and evaluate the next
-supported listen. It must be labeled as a filtered-catalog subsequence and
-must not be mixed into the primary result.
+The zero-gap audit was rejected as the primary setting because catalog coverage
+made it select almost only looped playback: 976,837 of 979,983 candidate
+windows contained a repeated song, and only 6.81% had five distinct targets.
+At a five-event gap, 41.70% of candidate windows have five distinct targets.
+To ensure that the task actually receives multiple reference songs, a window
+must contain at least eight distinct tracks among its 15 references and at
+least three distinct tracks among its five targets.
 
-Repeated listens are real preference signals and are retained. Consequently,
-the sequential evaluator must not exclude tracks merely because they appeared
-among the 15 references, and exact-overlap metrics must preserve multiplicity.
-The generated waveform remains a new composition; retaining repeats in proxy
-supervision does not authorize WP-D to copy a reference recording.
+Repeated listens that survive this diversity constraint are real preference
+signals and are retained. Sequential evaluators may therefore emit tracks that
+appeared in the references or earlier predictions, and exact-overlap metrics
+use multiset intersection. The generated waveform remains a new composition;
+retaining repeats in proxy supervision does not authorize WP-D to copy a
+reference recording.
 
-## Split and weighting to freeze after sorted-window audit
+## Frozen split and weighting
 
-Use a seeded user-level split so that evaluation listeners are absent from
-training. The model receives no user ID; it must infer preference solely from
-the 15 visible events. Within validation and test users, select the latest
-eligible window as the primary context so highly active listeners do not
-dominate evaluation. Training may use rolling windows, with a fixed per-user
-cap chosen before inspecting model results.
+- Split unit: user, assigned by seeded SHA-256 with seed 42.
+- Source split: 80% train / 20% test; validation is empty.
+- Training: seeded window sampling capped at 16 windows per user.
+- Testing: the latest eligible window for every held-out eligible user.
+- User IDs: replaced in split record IDs by deterministic 16-hex pseudonyms;
+  no user ID is supplied to the model.
 
-The exact train/validation/test fractions, per-user training cap, and resulting
-counts will be frozen after the correctly sorted strict-match dataset has been
-built. No checkpoint training should begin from the raw-order feasibility
-counts above.
+The frozen output contains 231,422 training windows from 19,552 users and
+4,725 test windows from 4,725 disjoint users. Before capping, the qualifying
+pool contains 2,157,666 train-user windows and 579,072 test-user windows.
+The 20,000-step, global-batch-512 schedule therefore draws 10.24 million
+training examples, or about 44.2 passes over the capped training set.
+
+## Frozen artifacts
+
+| Artifact | SHA-256 |
+|---|---|
+| Sequence manifest | `773025b803aa3ec02813b09802cca5dc1553f3505eb7ee31072ae4a4e98a6927` |
+| Train split | `81f5ee449c9a56831a957f432d10d0ba93acc6286bc79fd0b982b04c0e5eae6c` |
+| Test split | `cca5ce769ef87624a8dcf025cdc60efd9233b7043822d320ae976c53a1550652` |
+| Gap audit | `46bb40b479bb6ec53a381146f401a846df469b3182298d26118db965dfc98d59` |
+| Dataset materialization manifest | `c8849643be4388f513b66a4c956227669f7b05a48f022e28d383f665d929b885` |
+| WP-C prepared manifest | `cbf94e313ea21b98915ebc455edea2e4ef2e74b65af010cd6426aa044468fa11` |
 
 ## Reproducible commands
 
@@ -125,4 +144,33 @@ conda run -n music python scripts/audit_music4all_overlap.py \
   --interactions /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
   --output /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-overlap-v1/overlap_audit.json \
   --mapping-output /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-overlap-v1/item_mapping.csv
+```
+
+Build, materialize, and validate the frozen sequential dataset on the server:
+
+```bash
+conda run -n music python scripts/prepare_music4all_sequences.py \
+  --interactions /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
+  --mapping /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-overlap-v1/item_mapping.csv \
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-sequential-v1-k5-u8-u3-cap16 \
+  --work-dir /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-sort-work-v1 \
+  --seed 42 --test-fraction 0.2 --train-user-cap 16 \
+  --max-skipped-events 5 --min-unique-references 8 --min-unique-targets 3
+
+conda run -n music python scripts/materialize_music4all_dataset.py \
+  --sequence-dir /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-sequential-v1-k5-u8-u3-cap16 \
+  --catalog-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --output-dir /home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1
+
+conda run -n music python scripts/prepare_wp_c_data.py \
+  --data-dir /home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1 \
+  --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
+  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
+  --active-cues 8
+
+conda run -n music python scripts/validate_wp_c_prepared_data.py \
+  --data-dir /home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1 \
+  --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
+  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
+  --active-cues 8
 ```
