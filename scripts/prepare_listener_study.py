@@ -9,8 +9,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import sys
 
 import numpy as np
@@ -91,44 +89,39 @@ def _display_item(item_id: str, metadata: dict[str, dict]) -> dict[str, str]:
     }
 
 
-def _duration(path: Path, ffprobe: str) -> float:
-    output = subprocess.check_output(
-        [
-            ffprobe,
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        text=True,
-    ).strip()
-    value = float(output)
-    if not np.isfinite(value) or value <= 0:
-        raise ValueError(f"Invalid audio duration for {path}: {value}")
-    return value
+def _prepare_clip(
+    source: Path, destination: Path, seconds: float, sample_rate: int,
+) -> float:
+    """Decode both systems identically and save a fixed stereo PCM16 WAV."""
+    import torch
+    import torchaudio
 
-
-def _center_clip(source: Path, destination: Path, seconds: float, ffmpeg: str,
-                 ffprobe: str) -> float:
-    source_duration = _duration(source, ffprobe)
-    if source_duration + 0.05 < seconds:
+    waveform, source_rate = torchaudio.load(str(source))
+    if waveform.numel() == 0 or not torch.isfinite(waveform).all():
+        raise ValueError(f"Invalid audio samples: {source}")
+    waveform = waveform.to(torch.float32)
+    if waveform.shape[0] == 1:
+        waveform = waveform.repeat(2, 1)
+    elif waveform.shape[0] > 2:
+        waveform = waveform[:2]
+    if int(source_rate) != sample_rate:
+        waveform = torchaudio.functional.resample(
+            waveform, int(source_rate), sample_rate)
+    target_samples = int(round(seconds * sample_rate))
+    missing = target_samples - int(waveform.shape[1])
+    if missing > int(round(0.15 * sample_rate)):
         raise ValueError(
-            f"Real-next audio is shorter than the frozen clip: {source_duration:.3f}s")
-    start = max((source_duration - seconds) / 2.0, 0.0)
-    subprocess.run(
-        [
-            ffmpeg,
-            "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-            "-ss", f"{start:.6f}", "-i", str(source), "-t", f"{seconds:.6f}",
-            "-vn", "-codec:a", "libmp3lame", "-q:a", "2", str(destination),
-        ],
-        check=True,
-    )
-    output_duration = _duration(destination, ffprobe)
-    if abs(output_duration - seconds) > 0.15:
-        raise ValueError(
-            f"Clipped real-next duration drifted: {output_duration:.3f}s")
-    return output_duration
+            f"Study source is too short: {source} has "
+            f"{waveform.shape[1] / sample_rate:.3f}s")
+    if missing > 0:
+        waveform = torch.nn.functional.pad(waveform, (0, missing))
+    elif missing < 0:
+        start = (int(waveform.shape[1]) - target_samples) // 2
+        waveform = waveform[:, start:start + target_samples]
+    torchaudio.save(
+        str(destination), waveform, sample_rate,
+        encoding="PCM_S", bits_per_sample=16)
+    return waveform.shape[1] / sample_rate
 
 
 def _validated_generated_audio(audio_dir: Path, system: str, index: int) -> Path:
@@ -155,15 +148,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", type=int, default=25)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--clip-seconds", type=float, default=30.0)
-    parser.add_argument("--ffmpeg", default="ffmpeg")
-    parser.add_argument("--ffprobe", default="ffprobe")
+    parser.add_argument("--sample-rate", type=int, default=44_100)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.seed < 0 or args.clip_seconds <= 0:
-        raise ValueError("Seed must be nonnegative and clip length positive")
+    if args.seed < 0 or args.clip_seconds <= 0 or args.sample_rate <= 0:
+        raise ValueError("Seed must be nonnegative and audio settings positive")
     prepared_dir = args.prepared_dir.expanduser().resolve()
     generated_dir = args.generated_audio_dir.expanduser().resolve()
     catalog_audio_dir = args.catalog_audio_dir.expanduser().resolve()
@@ -193,18 +185,15 @@ def main() -> int:
         if not real_source.is_file():
             raise FileNotFoundError(real_source)
 
-        path_a = case_dir / "song_a.mp3"
-        path_b = case_dir / "song_b.mp3"
+        path_a = case_dir / "song_a.wav"
+        path_b = case_dir / "song_b.wav"
         generated_destination = path_a if generated_is_a else path_b
         real_destination = path_b if generated_is_a else path_a
-        shutil.copyfile(generated_source, generated_destination)
-        generated_duration = _duration(generated_destination, args.ffprobe)
-        if abs(generated_duration - args.clip_seconds) > 0.15:
-            raise ValueError(
-                f"Generated candidate duration drifted: {generated_duration:.3f}s")
-        real_duration = _center_clip(
-            real_source, real_destination, args.clip_seconds,
-            args.ffmpeg, args.ffprobe)
+        generated_duration = _prepare_clip(
+            generated_source, generated_destination,
+            args.clip_seconds, args.sample_rate)
+        real_duration = _prepare_clip(
+            real_source, real_destination, args.clip_seconds, args.sample_rate)
 
         public_cases.append({
             "case_id": case_id,
@@ -226,8 +215,9 @@ def main() -> int:
             "real_source_sha256": sha256_file(real_source),
             "song_a_sha256": sha256_file(path_a),
             "song_b_sha256": sha256_file(path_b),
-            "song_a_seconds": _duration(path_a, args.ffprobe),
-            "song_b_seconds": _duration(path_b, args.ffprobe),
+            "song_a_seconds": args.clip_seconds,
+            "song_b_seconds": args.clip_seconds,
+            "generated_clip_seconds": generated_duration,
             "real_center_clip_seconds": real_duration,
         })
         print(f"[study] {ordinal + 1}/{args.cases} {case_id}", flush=True)
@@ -254,6 +244,9 @@ def main() -> int:
             "reference_items": REFERENCE_ITEMS,
             "target_offset_one_based": TARGET_OFFSET + 1,
             "clip_seconds": args.clip_seconds,
+            "sample_rate": args.sample_rate,
+            "channels": 2,
+            "encoding": "PCM16 WAV; identical conversion for both candidates",
             "generated_side_balance": {
                 "song_a": sum(side_a),
                 "song_b": len(side_a) - sum(side_a),

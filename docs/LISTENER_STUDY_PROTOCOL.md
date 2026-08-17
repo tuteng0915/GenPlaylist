@@ -34,14 +34,17 @@ conda run -n music python scripts/prepare_listener_study.py \
   --generated-system GenPlaylist \
   --cases 25 \
   --seed 42 \
-  --clip-seconds 30
+  --clip-seconds 30 \
+  --sample-rate 44100
 ```
 
 The builder uniformly samples 25 contexts without replacement from all 941
 frozen contexts. It refuses to overwrite a nonempty output directory, verifies
-the generated-audio record hashes, center-clips the real candidate, balances
-the generated candidate between A and B to within one case, and records every
-input and output hash. `public_manifest.json` contains only reference labels
+the generated-audio record hashes, center-clips both candidates, converts both
+through the same 44.1-kHz stereo PCM16 WAV path, balances the generated
+candidate between A and B to within one case, and records every input and
+output hash. This identical conversion prevents the codec or file format from
+revealing which candidate is generated. `public_manifest.json` contains only reference labels
 and blinded asset paths. `private_manifest.json` contains the unblinding key
 and must not be exposed to participants.
 
