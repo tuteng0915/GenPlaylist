@@ -227,6 +227,9 @@ def _scan_sorted_events(
     seed: int,
     test_fraction: float,
     train_user_cap: int,
+    max_skipped_events: int,
+    min_unique_references: int,
+    min_unique_targets: int,
     progress_every: int,
 ) -> dict:
     """Consume a sorted event table and write capped train/latest-test windows."""
@@ -248,12 +251,18 @@ def _scan_sorted_events(
         "windows_with_duplicate_targets": 0,
         "target_occurrences_also_in_reference": 0,
     }
+    diversity_filter = {
+        "candidate_windows_before_filter": 0,
+        "rejected_unique_references": 0,
+        "rejected_unique_targets": 0,
+    }
 
     current_user: str | None = None
     current_split = ""
     run: list[tuple[str, str, int]] = []
     run_index = -1
     run_position = -1
+    skipped_events = 0
     user_window_count = 0
     train_heap: list[tuple[int, int, tuple]] = []
     latest_test: tuple | None = None
@@ -313,13 +322,18 @@ def _scan_sorted_events(
                 run = []
                 run_index = -1
                 run_position = -1
+                skipped_events = 0
                 user_window_count = 0
                 train_heap = []
                 latest_test = None
             if not item_id:
+                if run:
+                    skipped_events += 1
+                continue
+            if run and skipped_events > max_skipped_events:
                 run = []
                 run_position = -1
-                continue
+            skipped_events = 0
             if not run:
                 run_index += 1
             run_position += 1
@@ -331,11 +345,18 @@ def _scan_sorted_events(
 
             items = tuple(value[0] for value in run)
             start_index = run_position - WINDOW_ITEMS + 1
+            references = items[:REFERENCE_ITEMS]
+            targets = items[REFERENCE_ITEMS:]
+            diversity_filter["candidate_windows_before_filter"] += 1
+            if len(set(references)) < min_unique_references:
+                diversity_filter["rejected_unique_references"] += 1
+                continue
+            if len(set(targets)) < min_unique_targets:
+                diversity_filter["rejected_unique_targets"] += 1
+                continue
             candidate = (run_index, start_index, timestamp, items)
             user_window_count += 1
             candidate_serial += 1
-            references = items[:REFERENCE_ITEMS]
-            targets = items[REFERENCE_ITEMS:]
             reference_set = set(references)
             repeat_stats["windows_with_any_repeated_item"] += (
                 len(set(items)) != WINDOW_ITEMS
@@ -389,6 +410,7 @@ def _scan_sorted_events(
             str(cap): sum(min(value, cap) for value in positive_train_counts)
             for cap in CAP_CANDIDATES
         },
+        "diversity_filter": diversity_filter,
         "repeat_statistics_over_all_eligible_windows": repeat_stats,
     }
 
@@ -402,6 +424,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--train-user-cap", type=int, default=100)
+    parser.add_argument(
+        "--max-skipped-events", type=int, default=0,
+        help="Maximum unsupported events between adjacent mapped events.")
+    parser.add_argument("--min-unique-references", type=int, default=1)
+    parser.add_argument("--min-unique-targets", type=int, default=1)
     parser.add_argument("--include-relaxed", action="store_true")
     parser.add_argument("--reuse-spool", action="store_true")
     parser.add_argument("--reuse-sorted", action="store_true")
@@ -420,6 +447,13 @@ def main() -> int:
         raise ValueError("test-fraction must be in [0, 1)")
     if args.train_user_cap < 0:
         raise ValueError("train-user-cap must be nonnegative (0 means uncapped)")
+    if args.max_skipped_events < 0:
+        raise ValueError("max-skipped-events must be nonnegative")
+    if not 1 <= args.min_unique_references <= REFERENCE_ITEMS:
+        raise ValueError(
+            f"min-unique-references must be in [1, {REFERENCE_ITEMS}]")
+    if not 1 <= args.min_unique_targets <= TARGET_ITEMS:
+        raise ValueError(f"min-unique-targets must be in [1, {TARGET_ITEMS}]")
     interactions = args.interactions.expanduser().resolve()
     mapping_path = args.mapping.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
@@ -466,6 +500,9 @@ def main() -> int:
         args.seed,
         args.test_fraction,
         args.train_user_cap,
+        args.max_skipped_events,
+        args.min_unique_references,
+        args.min_unique_targets,
         args.progress_every,
     )
     (splits_dir / "val.txt").write_text("", encoding="utf-8")
@@ -475,8 +512,15 @@ def main() -> int:
         "protocol": {
             "sequence": "chronological ascending by timestamp; source row breaks ties",
             "window": "15 reference events followed by 5 target events",
-            "unsupported_event": "breaks the supported run",
+            "unsupported_event": (
+                f"up to {args.max_skipped_events} skipped events are allowed "
+                "between mapped events; a larger gap breaks the run"
+            ),
             "repeated_listens": "retained",
+            "diversity_filter": (
+                f"at least {args.min_unique_references}/15 unique references and "
+                f"{args.min_unique_targets}/5 unique targets"
+            ),
             "mapping": "strict one-to-one" if not args.include_relaxed else "strict plus relaxed-version",
             "split": "seeded SHA-256 user-disjoint 80/20 train/test" if args.test_fraction == 0.2 else "seeded SHA-256 user-disjoint train/test",
             "test_context": "latest eligible window per test user",
@@ -486,6 +530,9 @@ def main() -> int:
             "seed": args.seed,
             "test_fraction": args.test_fraction,
             "train_user_cap": args.train_user_cap,
+            "max_skipped_events": args.max_skipped_events,
+            "min_unique_references": args.min_unique_references,
+            "min_unique_targets": args.min_unique_targets,
             "accepted_mapping_items": len(mapping),
         },
         "sources": {

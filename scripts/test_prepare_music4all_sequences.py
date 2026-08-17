@@ -60,6 +60,9 @@ def test_sorted_scan_breaks_runs_and_retains_repeats() -> None:
             seed=42,
             test_fraction=0.0,
             train_user_cap=1,
+            max_skipped_events=0,
+            min_unique_references=1,
+            min_unique_targets=1,
             progress_every=0,
         )
         assert result["eligible_windows_by_split"] == {"train": 2, "test": 0}
@@ -69,6 +72,40 @@ def test_sorted_scan_breaks_runs_and_retains_repeats() -> None:
         repeats = result["repeat_statistics_over_all_eligible_windows"]
         assert repeats["windows_with_any_repeated_item"] == 2
         assert repeats["windows_with_target_reference_overlap"] == 2
+
+
+def test_gap_and_diversity_constraints() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sorted_path = root / "sorted.tsv"
+        rows = []
+        source_row = 0
+        for index in range(20):
+            source_row += 1
+            item = str(index + 1)
+            rows.append(
+                f"u\t2026-01-01 00:00:{source_row:02d}\t{source_row}\t{item}\n"
+            )
+            if index == 9:
+                source_row += 1
+                rows.append(
+                    f"u\t2026-01-01 00:00:{source_row:02d}\t{source_row}\t\n"
+                )
+        sorted_path.write_text("".join(rows), encoding="utf-8")
+        accepted = MODULE._scan_sorted_events(
+            sorted_path, root / "train.txt", root / "test.txt",
+            seed=42, test_fraction=0.0, train_user_cap=16,
+            max_skipped_events=1, min_unique_references=8,
+            min_unique_targets=3, progress_every=0,
+        )
+        assert accepted["output_windows_by_split"]["train"] == 1
+        rejected = MODULE._scan_sorted_events(
+            sorted_path, root / "train2.txt", root / "test2.txt",
+            seed=42, test_fraction=0.0, train_user_cap=16,
+            max_skipped_events=0, min_unique_references=8,
+            min_unique_targets=3, progress_every=0,
+        )
+        assert rejected["output_windows_by_split"]["train"] == 0
 
 
 def test_user_split_is_stable() -> None:
@@ -81,5 +118,6 @@ def test_user_split_is_stable() -> None:
 if __name__ == "__main__":
     test_mapping_defaults_to_strict()
     test_sorted_scan_breaks_runs_and_retains_repeats()
+    test_gap_and_diversity_constraints()
     test_user_split_is_stable()
     print("Music4All sequence preparation tests passed")
