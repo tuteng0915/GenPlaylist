@@ -54,13 +54,14 @@ on an untrusted file.
 
 ## 2. Extract canonical CLHE/RVQ artifacts
 
-On the NCL server the source catalog is outside the repository. Extract the
-5,119 catalog rows directly from the checkpoint:
+The canonical catalog and generated data now live under the repository's
+gitignored `data/` directory. Extract the 5,119 catalog rows directly from the
+checkpoint:
 
 ```bash
 conda run -n music python scripts/extract_ddbc_checkpoint_artifacts.py \
   --checkpoint checkpoints/pretrained/ddbc/spotify30.ckpt \
-  --catalog /home/wjzhang/tt_workspace/data/data/dataset/catalog_metadata.json \
+  --catalog data/dataset/catalog_metadata.json \
   --output-dir data/dataset \
   --confirm-dense-item-ids
 ```
@@ -69,14 +70,8 @@ The explicit confirmation is required even though the official tokenizer was
 verified to contain exhaustive dense IDs `"0".."254154"`. For the current
 catalog all 5,119 IDs are covered, selected CLHE rows are finite `(5119, 64)`,
 the RVQ weights are finite `(768, 64)`, and observed conflict tokens are only
-769–776.
-
-Copy the authoritative catalog alongside those generated artifacts; keep audio
-and lyrics in their external data directory:
-
-```bash
-cp /home/wjzhang/tt_workspace/data/data/dataset/catalog_metadata.json data/dataset/
-```
+769–776. Raw data, audio, lyrics, processed caches, and evaluation results stay
+under `data/` and are excluded by the repository `.gitignore`.
 
 The CLHE source is the implementation and dataset contract published by
 `Xiaohao-Liu/CLHE`; no separate CLHE retraining is necessary for this subset
@@ -226,9 +221,9 @@ once before launching training:
 
 ```bash
 conda run -n music python scripts/prepare_wp_c_data.py \
-  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --data-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
   --artifact-dir data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v4-8cue-20item-joint-15to5
+  --output-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-v4-8cue-20item-joint-15to5
 ```
 
 `train_spotify.sh` resolves that directory from `GENPLAYLIST_DATA_ROOT` by

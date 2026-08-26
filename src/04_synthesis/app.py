@@ -27,10 +27,9 @@ import gradio as gr
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("GENPLAYLIST_DATA_DIR", REPO_ROOT / "data"))
 _repo_audio_dir = DATA_DIR / "audio" / "spotify"
-_legacy_audio_dir = Path("/home/wjzhang/tt_workspace/data/data/audio/spotify")
 AUDIO_DIR = Path(os.environ.get(
     "GENPLAYLIST_AUDIO_DIR",
-    _repo_audio_dir if _repo_audio_dir.is_dir() else _legacy_audio_dir,
+    _repo_audio_dir,
 ))
 CATALOG_PATH = DATA_DIR / "dataset" / "catalog_metadata.json"
 _repo_curated_dir = REPO_ROOT / "data" / "curated"

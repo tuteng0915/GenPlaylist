@@ -127,14 +127,14 @@ Prepare all checkpoint-independent data once before training:
 
 ```bash
 conda run -n music python scripts/prepare_wp_c_data.py \
-  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --data-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v4-8cue-20item-joint-15to5
+  --output-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-v4-8cue-20item-joint-15to5
 
 conda run -n music python scripts/validate_wp_c_prepared_data.py \
-  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --data-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
-  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v4-8cue-20item-joint-15to5
+  --prepared-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-v4-8cue-20item-joint-15to5
 ```
 
 The versioned output contains raw and tokenized Arrow `DatasetDict`s, normalized
@@ -149,9 +149,9 @@ Run the official post-training evaluation with the final checkpoint:
 
 ```bash
 cd /home/wjzhang/tt_workspace/model/GenPlaylist
-export GENPLAYLIST_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/dataset
+export GENPLAYLIST_DATA_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
 export GENPLAYLIST_ARTIFACT_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
-export GENPLAYLIST_PREPARED_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/processed/genplaylist-v4-8cue-20item-joint-15to5
+export GENPLAYLIST_PREPARED_DATA_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-v4-8cue-20item-joint-15to5
 export GENPLAYLIST_EVAL_CKPT=/path/to/new/joint-15to5/checkpoint.ckpt
 conda run -n music bash src/03_backbone_recommender/scripts/eval_spotify.sh
 ```
@@ -169,7 +169,7 @@ WP-A uses the same unified test windows. Its canonical CLHE baseline is:
 
 ```bash
 conda run -n music python src/01_input_normalization/build_recall_eval.py \
-  --data-dir /home/wjzhang/tt_workspace/data/data/dataset \
+  --data-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
 ```
 

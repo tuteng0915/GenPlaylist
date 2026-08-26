@@ -131,7 +131,7 @@ Download and verify the official timestamp table:
 
 ```bash
 conda run -n music python scripts/download_music4all_onion.py \
-  --output /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
+  --output /home/wjzhang/tt_workspace/model/GenPlaylist/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
   --workers 8
 ```
 
@@ -139,40 +139,40 @@ Reproduce the overlap audit:
 
 ```bash
 conda run -n music python scripts/audit_music4all_overlap.py \
-  --catalog-metadata /home/wjzhang/tt_workspace/data/data/dataset/catalog_metadata.json \
-  --music4all-information /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/identity/id_information.csv \
-  --music4all-metadata /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/identity/id_metadata.csv \
-  --interactions /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
-  --output /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-overlap-v1/overlap_audit.json \
-  --mapping-output /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-overlap-v1/item_mapping.csv
+  --catalog-metadata /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset/catalog_metadata.json \
+  --music4all-information /home/wjzhang/tt_workspace/model/GenPlaylist/data/raw/music4all-onion/identity/id_information.csv \
+  --music4all-metadata /home/wjzhang/tt_workspace/model/GenPlaylist/data/raw/music4all-onion/identity/id_metadata.csv \
+  --interactions /home/wjzhang/tt_workspace/model/GenPlaylist/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
+  --output /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/music4all-onion-overlap-v1/overlap_audit.json \
+  --mapping-output /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/music4all-onion-overlap-v1/item_mapping.csv
 ```
 
 Build, materialize, and validate the frozen sequential dataset on the server:
 
 ```bash
 conda run -n music python scripts/prepare_music4all_sequences.py \
-  --interactions /home/wjzhang/tt_workspace/data/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
-  --mapping /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-overlap-v1/item_mapping.csv \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-sequential-v1-k5-u8-u3-cap16 \
-  --work-dir /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-sort-work-v1 \
+  --interactions /home/wjzhang/tt_workspace/model/GenPlaylist/data/raw/music4all-onion/userid_trackid_timestamp.tsv.bz2 \
+  --mapping /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/music4all-onion-overlap-v1/item_mapping.csv \
+  --output-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/music4all-onion-sequential-v1-k5-u8-u3-cap16 \
+  --work-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/music4all-onion-sort-work-v1 \
   --seed 42 --test-fraction 0.2 --train-user-cap 16 \
   --max-skipped-events 5 --min-unique-references 8 --min-unique-targets 3
 
 conda run -n music python scripts/materialize_music4all_dataset.py \
-  --sequence-dir /home/wjzhang/tt_workspace/data/data/processed/music4all-onion-sequential-v1-k5-u8-u3-cap16 \
-  --catalog-dir /home/wjzhang/tt_workspace/data/data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1
+  --sequence-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/music4all-onion-sequential-v1-k5-u8-u3-cap16 \
+  --catalog-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
+  --output-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset-music4all-onion-v1
 
 conda run -n music python scripts/prepare_wp_c_data.py \
-  --data-dir /home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1 \
+  --data-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset-music4all-onion-v1 \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
+  --output-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
   --active-cues 8
 
 conda run -n music python scripts/validate_wp_c_prepared_data.py \
-  --data-dir /home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1 \
+  --data-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset-music4all-onion-v1 \
   --artifact-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset \
-  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
+  --prepared-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16 \
   --active-cues 8
 ```
 
@@ -186,8 +186,8 @@ Music4All Hydra data configuration explicitly:
 
 ```bash
 export GENPLAYLIST_DATA_CONFIG=music4all
-export GENPLAYLIST_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/dataset-music4all-onion-v1
+export GENPLAYLIST_DATA_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset-music4all-onion-v1
 export GENPLAYLIST_ARTIFACT_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/dataset
-export GENPLAYLIST_PREPARED_DATA_ROOT=/home/wjzhang/tt_workspace/data/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16
+export GENPLAYLIST_PREPARED_DATA_ROOT=/home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-music4all-onion-v1-8cue-k5-u8-u3-cap16
 bash src/03_backbone_recommender/scripts/train_spotify.sh
 ```

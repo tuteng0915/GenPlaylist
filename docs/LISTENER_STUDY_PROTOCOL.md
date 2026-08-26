@@ -26,11 +26,11 @@ Run the case builder on the server:
 
 ```bash
 conda run -n music python scripts/prepare_listener_study.py \
-  --prepared-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-v4-8cue-20item-joint-15to5 \
-  --generated-audio-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-end-to-end/ace-step-v1 \
-  --catalog-audio-dir /home/wjzhang/tt_workspace/data/data/audio/spotify \
+  --prepared-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-v4-8cue-20item-joint-15to5 \
+  --generated-audio-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-end-to-end/ace-step-v1 \
+  --catalog-audio-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/audio/spotify \
   --catalog-metadata data/dataset/catalog_metadata.json \
-  --output-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-listener-study-v1 \
+  --output-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-listener-study-v1 \
   --generated-system GenPlaylist \
   --cases 25 \
   --seed 42 \
@@ -64,7 +64,7 @@ Before deployment, verify the package without launching a server:
 
 ```bash
 conda run -n music python scripts/run_frozen_listener_study.py \
-  --study-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-listener-study-v1 \
+  --study-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-listener-study-v1 \
   --validate-only
 ```
 
@@ -74,7 +74,7 @@ every placeholder with approved text, and launch the standalone service:
 
 ```bash
 conda run -n music python scripts/run_frozen_listener_study.py \
-  --study-dir /home/wjzhang/tt_workspace/data/data/processed/genplaylist-listener-study-v1 \
+  --study-dir /home/wjzhang/tt_workspace/model/GenPlaylist/data/processed/genplaylist-listener-study-v1 \
   --consent-file /restricted/path/approved_consent.md \
   --database /restricted/path/responses.sqlite3 \
   --participant-key /restricted/path/participant_hmac.key \
