@@ -4,6 +4,14 @@ This document is the server-side portion of the GenPlaylist-v1 migration. The
 repository code does not require model files to exist during local development,
 but training and live generation must pass the checks below.
 
+## External data backup
+
+The MPD-side data backup is stored in this
+[Google Drive folder](https://drive.google.com/drive/folders/1l2Qw3pKZa2EFVz5zRXFIbWzYOpgUNLv9?usp=drive_link).
+It is a backup of MPD assets, not the Music4All-Onion chronological event
+table. Rebuild the latter from the checksummed Zenodo source documented in
+[`MUSIC4ALL_ONION_PROTOCOL.md`](MUSIC4ALL_ONION_PROTOCOL.md).
+
 ## What `catalog_item_embeddings.npy` means
 
 It is the per-song CLHE table for the current frozen catalog:
