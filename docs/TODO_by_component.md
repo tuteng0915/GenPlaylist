@@ -85,7 +85,7 @@ not authorize WP-D demo code or UI changes.
 - [x] Freeze the bounded-gap, diversity-filtered, user-disjoint 15->5 split and cap=16.
 - [x] Update proxy evaluators to retain repeated listens and multiset exact matching.
 - [x] Prepare and exhaustively validate the Music4All WP-C Arrow cache and vectors.
-- [ ] Retrain DDBC-SFT and GenPlaylist on the sequential windows and rerun baselines.
+- [x] Retrain DDBC-SFT and GenPlaylist on the sequential windows and rerun all six proxy methods.
 - [ ] Regenerate the Music4All end-to-end audio suite and automatic metrics.
 - [ ] Update the paper so Music4All is primary and MPD is the playlist-proxy comparison.
 

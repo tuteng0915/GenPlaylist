@@ -8,6 +8,9 @@ claims for unfinished paper cells. All primary proxy results use 941 histories,
 `mert-v1-95m-catalog-v1`. Confidence intervals are 10,000-sample history-level
 bootstrap intervals with seed 42.
 
+The post-recovery artifact inventory, hashes, and exact legacy comparisons are
+recorded in [`REPRODUCTION_AUDIT_20260827.md`](REPRODUCTION_AUDIT_20260827.md).
+
 ## Primary playlist-proxy results
 
 | Method | N1-MERT | Recall@5 | M2M-MERT | Coverage@5 |
@@ -35,6 +38,29 @@ its Recall@5 improvement over CLHE-kNN is not explained by history sampling
 noise. Conversely, the completed proxy runs do not support a claim that cue
 tokens improve catalog continuation. Their value must be tested in the
 end-to-end audio experiment rather than inferred from these rows.
+
+## Music4All-Onion sequential results
+
+The sequential experiment uses 231,422 capped training windows and one frozen
+test window for each of 4,725 held-out users. Repeated listens are retained,
+users are disjoint across train and test, and every example contains 15
+references followed by five targets. DDBC-SFT and GenPlaylist use independently
+trained 20,000-step Music4All checkpoints; the other four methods are rerun on
+the same test set and catalog.
+
+| Method | N1-MERT | Recall@5 | M2M-MERT | Coverage@5 |
+|---|---:|---:|---:|---:|
+| CLHE-kNN | 0.8831 | 0.1010 | **0.9000** | 0.4001 |
+| SASRec | **0.8931** | **0.1261** | 0.8902 | 0.1911 |
+| TIGER adaptation (LR $10^{-3}$) | 0.8852 | 0.0721 | 0.8824 | 0.1088 |
+| DDBC-Base | 0.8709 | 0.0105 | 0.8871 | **0.6757** |
+| DDBC-SFT (0 cues) | 0.8774 | 0.0841 | 0.8948 | 0.3391 |
+| GenPlaylist (8 cues) | 0.8741 | 0.0624 | 0.8922 | 0.4401 |
+
+These results do not show an 8-cue proxy advantage over the 0-cue SFT model:
+DDBC-SFT is higher on Recall@5, N1-MERT, and M2M-MERT, while GenPlaylist has
+higher catalog coverage. Cue utility is therefore evaluated at the audio
+conditioning boundary rather than claimed from retrieval accuracy.
 
 The TIGER adaptation generates one constrained semantic ID at a time and
 recursively appends five predictions. Directly transferring the reported peak
