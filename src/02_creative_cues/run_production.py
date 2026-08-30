@@ -46,7 +46,9 @@ import cue_io                   # noqa: E402
 import cue_assign               # noqa: E402
 from schema import CUE_CANDIDATES_PER_ITEM, CUE_TOKENS   # noqa: E402
 
-OUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "production")
+DEFAULT_OUT_ROOT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "outputs", "production"
+)
 
 
 def main():
@@ -69,6 +71,13 @@ def main():
              "per-song table; extraction and vocabulary rebuilding are skipped")
     ap.add_argument("--skip-health-check", action="store_true",
                     help="skip the free coverage/diversity sanity stats (on by default; no LLM calls)")
+    ap.add_argument(
+        "--output-root", default=os.environ.get("CUE_OUTPUT_ROOT", DEFAULT_OUT_ROOT),
+        help=(
+            "dataset-specific production output root; defaults to the legacy "
+            "WP-B production directory or CUE_OUTPUT_ROOT"
+        ),
+    )
     args = ap.parse_args()
 
     cfg = cue_config.get_preset(args.config)
@@ -93,8 +102,9 @@ def main():
               "wp_d_compatible=false.")
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(OUT_ROOT, stamp)
-    latest_dir = os.path.join(OUT_ROOT, "latest")
+    output_root = str(Path(args.output_root).expanduser().resolve())
+    run_dir = os.path.join(output_root, stamp)
+    latest_dir = os.path.join(output_root, "latest")
 
     items, lyrics_raw = data_loading.load_catalog_and_lyrics(cfg.limit)
     if items and not lyrics_raw:
@@ -160,6 +170,7 @@ def main():
                   if args.fixed_vocab else None,
                   "catalog_path": str(data_loading.CATALOG_PATH.resolve()),
                   "lyrics_dir": str(data_loading.LYRICS_DIR.resolve()),
+                  "output_root": output_root,
                   "n_items": len(items), "n_with_lyrics": len(lyrics_raw)}
     cue_io.atomic_write_json(os.path.join(run_dir, "run_config.json"), run_config)
 

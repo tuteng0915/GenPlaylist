@@ -58,6 +58,7 @@ preset, don't reach for a flag.
 | `--force` | off | Bypass extraction/cleaning caches, re-run from scratch |
 | `--vocab-size N` | preset's value (`2048`) | Override total vocab entries incl. `<unk>` — a non-default value needs a matching `vocab_size` passed to `CueMappingEntry.validate()`/`load_mapping()` to read the result back correctly |
 | `--fixed-vocab PATH` | off | Freeze an existing `cue_vocab.json` and regenerate only the ranked per-song table |
+| `--output-root PATH` | legacy production directory | Write a dataset-specific timestamped run and `latest/` mirror without replacing another dataset's cue artifacts; `CUE_OUTPUT_ROOT` is the environment equivalent |
 | `--skip-health-check` | off | Skip the free coverage/diversity sanity stats (they cost no API calls; on by default) |
 
 ### Presets (`config.py`)
