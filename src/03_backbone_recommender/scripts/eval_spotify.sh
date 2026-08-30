@@ -11,6 +11,7 @@ export PYTHONPATH="$WP_ROOT:${PYTHONPATH:-}"
 DATA_ROOT="${GENPLAYLIST_DATA_ROOT:-$REPO_ROOT/data/dataset}"
 DATA_CONFIG="${GENPLAYLIST_DATA_CONFIG:-spotify}"
 ARTIFACT_ROOT="${GENPLAYLIST_ARTIFACT_ROOT:-$REPO_ROOT/data/dataset}"
+CUE_ROOT="${GENPLAYLIST_CUE_ROOT:-$REPO_ROOT/src/02_creative_cues/outputs/production/latest}"
 DEFAULT_PREPARED_ROOT="${DATA_ROOT%/dataset}/processed/genplaylist-v4-8cue-20item-joint-15to5"
 PREPARED_DATA_ROOT="${GENPLAYLIST_PREPARED_DATA_ROOT:-$DEFAULT_PREPARED_ROOT}"
 EVAL_CKPT="${GENPLAYLIST_EVAL_CKPT:-}"
@@ -58,9 +59,9 @@ for required in \
   "$ARTIFACT_ROOT/item_id_to_row.json" \
   "$ARTIFACT_ROOT/semantic_tokens.json" \
   "$ARTIFACT_ROOT/rvq_codebook_weights.npy" \
-  "$REPO_ROOT/src/02_creative_cues/outputs/production/latest/item2cues.json" \
-  "$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_vocab.json" \
-  "$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_manifest.json"; do
+  "$CUE_ROOT/item2cues.json" \
+  "$CUE_ROOT/cue_vocab.json" \
+  "$CUE_ROOT/cue_manifest.json"; do
   if [[ ! -f "$required" ]]; then
     echo "Missing evaluation input: $required" >&2
     exit 1
@@ -80,9 +81,9 @@ python main.py \
   item_id_to_row_path="$ARTIFACT_ROOT/item_id_to_row.json" \
   semantic_tokens_path="$ARTIFACT_ROOT/semantic_tokens.json" \
   codebook_weights_path="$ARTIFACT_ROOT/rvq_codebook_weights.npy" \
-  item2cues_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/item2cues.json" \
-  cue_vocab_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_vocab.json" \
-  cue_manifest_path="$REPO_ROOT/src/02_creative_cues/outputs/production/latest/cue_manifest.json" \
+  item2cues_path="$CUE_ROOT/item2cues.json" \
+  cue_vocab_path="$CUE_ROOT/cue_vocab.json" \
+  cue_manifest_path="$CUE_ROOT/cue_manifest.json" \
   prepared_dataset_path="$PREPARED_DATA_ROOT" \
   active_cue_tokens="$ACTIVE_CUES" \
   model.length="$MODEL_LENGTH" \
