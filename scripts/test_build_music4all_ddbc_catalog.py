@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import bz2
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -31,11 +32,13 @@ def test_catalog_keeps_only_observed_strict_rows() -> None:
         {"m1": {"id": "m1", "spotify_id": "spotify", "tempo": "120",
                 "key": "0", "mode": "1", "duration_ms": "1000",
                 "danceability": "0.5", "energy": "0.6", "valence": "0.7"}},
+        {"m1": ["rock", "alternative"]},
     )
     assert list(metadata) == ["7"]
     assert catalog[0]["source_music4all_id"] == "m1"
     assert catalog[0]["event_count"] == 3
     assert catalog[0]["key"] == "C major"
+    assert catalog[0]["tags"] == ["rock", "alternative"]
     assert observed == rows
 
 
@@ -59,7 +62,20 @@ def test_mapping_filter_rejects_unobserved_and_relaxed_rows() -> None:
         ] == ["1", "3"]
 
 
+def test_weighted_tags_are_ranked_deterministically() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "tags.tsv.bz2"
+        with bz2.open(path, "wt", encoding="utf-8") as handle:
+            handle.write("id\t(tag, weight)\n")
+            handle.write("m1\t{'zeta': 50, 'alpha': 50, 'rock': 100}\n")
+            handle.write("m2\t{'ignored': 100}\n")
+        assert MODULE._read_weighted_tags(path, {"m1"}, max_tags=2) == {
+            "m1": ["rock", "alpha"],
+        }
+
+
 if __name__ == "__main__":
     test_catalog_keeps_only_observed_strict_rows()
     test_mapping_filter_rejects_unobserved_and_relaxed_rows()
+    test_weighted_tags_are_ranked_deterministically()
     print("Music4All DDBC catalog tests passed")

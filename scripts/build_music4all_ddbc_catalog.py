@@ -15,6 +15,8 @@ dataset.
 from __future__ import annotations
 
 import argparse
+import ast
+import bz2
 import csv
 from datetime import datetime, timezone
 import hashlib
@@ -46,6 +48,41 @@ def _read_tsv(path: Path) -> dict[str, dict[str, str]]:
     output = {str(row["id"]): row for row in rows}
     if len(output) != len(rows):
         raise ValueError(f"Duplicate Music4All IDs in {path}")
+    return output
+
+
+def _read_weighted_tags(
+    path: Path, selected_ids: set[str], max_tags: int,
+) -> dict[str, list[str]]:
+    if max_tags < 1:
+        raise ValueError("max-tags must be positive")
+    output: dict[str, list[str]] = {}
+    handle = (
+        bz2.open(path, mode="rt", encoding="utf-8", newline="")
+        if path.suffix == ".bz2"
+        else path.open(mode="rt", encoding="utf-8", newline="")
+    )
+    with handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if not reader.fieldnames or not {"id", "(tag, weight)"}.issubset(
+            reader.fieldnames
+        ):
+            raise ValueError(f"Unexpected weighted-tag columns in {path}")
+        for row in reader:
+            item_id = row["id"]
+            if item_id not in selected_ids:
+                continue
+            try:
+                raw = ast.literal_eval(row["(tag, weight)"])
+            except (SyntaxError, ValueError) as error:
+                raise ValueError(f"Malformed tag dictionary for {item_id}") from error
+            if not isinstance(raw, dict):
+                raise ValueError(f"Tag payload for {item_id} is not a dictionary")
+            ranked = sorted(
+                ((str(tag).strip(), float(weight)) for tag, weight in raw.items()),
+                key=lambda value: (-value[1], value[0].casefold()),
+            )
+            output[item_id] = [tag for tag, _ in ranked[:max_tags] if tag]
     return output
 
 
@@ -115,7 +152,9 @@ def build_catalog(
     ddbc_tokens: dict[str, list[int]],
     information: dict[str, dict[str, str]],
     metadata: dict[str, dict[str, str]],
+    tags: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, dict], list[dict], list[dict[str, str]]]:
+    tags = tags or {}
     catalog_metadata: dict[str, dict] = {}
     catalog: list[dict] = []
     for row in mapping_rows:
@@ -136,7 +175,7 @@ def build_catalog(
             "artist": info.get("artist", ""),
             "album": info.get("album_name", ""),
             "genre": "",
-            "tags": [],
+            "tags": tags.get(source, []),
             "mood": "",
             "tempo": tempo,
             "key": _key_label(meta),
@@ -172,6 +211,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ddbc-semantic-tokens", type=Path, required=True)
     parser.add_argument("--music4all-information", type=Path, required=True)
     parser.add_argument("--music4all-metadata", type=Path, required=True)
+    parser.add_argument("--music4all-tags", type=Path)
+    parser.add_argument("--music4all-lyrics-dir", type=Path)
+    parser.add_argument("--max-tags", type=int, default=16)
+    parser.add_argument("--lyric-excerpt-chars", type=int, default=500)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--include-relaxed", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -190,6 +233,20 @@ def main() -> int:
     for path in sources.values():
         if not path.is_file():
             raise FileNotFoundError(path)
+    tags_path = (
+        args.music4all_tags.expanduser().resolve()
+        if args.music4all_tags is not None else None
+    )
+    if tags_path is not None and not tags_path.is_file():
+        raise FileNotFoundError(tags_path)
+    lyrics_dir = (
+        args.music4all_lyrics_dir.expanduser().resolve()
+        if args.music4all_lyrics_dir is not None else None
+    )
+    if lyrics_dir is not None and not lyrics_dir.is_dir():
+        raise FileNotFoundError(lyrics_dir)
+    if args.lyric_excerpt_chars < 0:
+        raise ValueError("lyric-excerpt-chars must be nonnegative")
     output_dir = args.output_dir.expanduser().resolve()
     if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
         raise FileExistsError(
@@ -213,9 +270,34 @@ def main() -> int:
         }
         information = _read_tsv(sources["music4all_information"])
         metadata = _read_tsv(sources["music4all_metadata"])
-        catalog_metadata, catalog, observed_mapping = build_catalog(
-            mapping_rows, ddbc_metadata, ddbc_tokens, information, metadata,
+        selected_source_ids = {row["music4all_id"] for row in mapping_rows}
+        tags = (
+            _read_weighted_tags(tags_path, selected_source_ids, args.max_tags)
+            if tags_path is not None else {}
         )
+        catalog_metadata, catalog, observed_mapping = build_catalog(
+            mapping_rows, ddbc_metadata, ddbc_tokens, information, metadata, tags,
+        )
+        lyric_count = 0
+        if lyrics_dir is not None:
+            destination_dir = temporary / "lyrics"
+            destination_dir.mkdir()
+            for item in catalog:
+                source = lyrics_dir / f"{item['source_music4all_id']}.txt"
+                if not source.is_file():
+                    continue
+                destination = destination_dir / f"{item['item_id']}.txt"
+                os.link(source, destination)
+                final_path = output_dir / "lyrics" / destination.name
+                item["lyrics_path"] = str(final_path)
+                item["lyric_excerpt"] = source.read_text(
+                    encoding="utf-8", errors="ignore"
+                ).strip()[:args.lyric_excerpt_chars]
+                catalog_metadata[item["item_id"]]["lyrics_path"] = str(final_path)
+                catalog_metadata[item["item_id"]]["lyric_excerpt"] = item[
+                    "lyric_excerpt"
+                ]
+                lyric_count += 1
         _atomic_json(temporary / "catalog_metadata.json", catalog_metadata)
         _atomic_json(temporary / "catalog.json", catalog)
         (temporary / "complete_ids.txt").write_text(
@@ -235,6 +317,8 @@ def main() -> int:
             ),
             "catalog_items": len(catalog),
             "mapped_events": total_events,
+            "items_with_weighted_tags": sum(bool(item["tags"]) for item in catalog),
+            "items_with_processed_lyrics": lyric_count,
             "source_music4all_items": len({
                 item["source_music4all_id"] for item in catalog
             }),
@@ -251,6 +335,15 @@ def main() -> int:
                 for name, path in sources.items()
             },
         }
+        for name, path in {
+            "music4all_tags": tags_path,
+        }.items():
+            if path is not None:
+                stats["sources"][name] = {
+                    "path": str(path),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
         _atomic_json(temporary / "stats.json", stats)
         if output_dir.exists():
             shutil.rmtree(output_dir)
