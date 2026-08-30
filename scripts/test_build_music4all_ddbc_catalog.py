@@ -33,12 +33,14 @@ def test_catalog_keeps_only_observed_strict_rows() -> None:
                 "key": "0", "mode": "1", "duration_ms": "1000",
                 "danceability": "0.5", "energy": "0.6", "valence": "0.7"}},
         {"m1": ["rock", "alternative"]},
+        {"m1": ["indie rock", "rock"]},
     )
     assert list(metadata) == ["7"]
     assert catalog[0]["source_music4all_id"] == "m1"
     assert catalog[0]["event_count"] == 3
     assert catalog[0]["key"] == "C major"
-    assert catalog[0]["tags"] == ["rock", "alternative"]
+    assert catalog[0]["genre"] == "indie rock"
+    assert catalog[0]["tags"] == ["indie rock", "rock", "alternative"]
     assert observed == rows
 
 
@@ -74,8 +76,21 @@ def test_weighted_tags_are_ranked_deterministically() -> None:
         }
 
 
+def test_tfidf_genres_are_ranked_deterministically() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "genres.tsv.bz2"
+        with bz2.open(path, "wt", encoding="utf-8") as handle:
+            handle.write("id\trock\tpop\tambient\n")
+            handle.write("m1\t0.5\t1.0\t0\n")
+            handle.write("m2\t1.0\t0\t0\n")
+        assert MODULE._read_tfidf_labels(path, {"m1"}, max_labels=2) == {
+            "m1": ["pop", "rock"],
+        }
+
+
 if __name__ == "__main__":
     test_catalog_keeps_only_observed_strict_rows()
     test_mapping_filter_rejects_unobserved_and_relaxed_rows()
     test_weighted_tags_are_ranked_deterministically()
+    test_tfidf_genres_are_ranked_deterministically()
     print("Music4All DDBC catalog tests passed")

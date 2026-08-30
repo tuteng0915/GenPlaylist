@@ -86,6 +86,59 @@ def _read_weighted_tags(
     return output
 
 
+def _read_tfidf_labels(
+    path: Path, selected_ids: set[str], max_labels: int,
+) -> dict[str, list[str]]:
+    if max_labels < 1:
+        raise ValueError("max-genres must be positive")
+    handle = (
+        bz2.open(path, mode="rt", encoding="utf-8", newline="")
+        if path.suffix == ".bz2"
+        else path.open(mode="rt", encoding="utf-8", newline="")
+    )
+    output: dict[str, list[str]] = {}
+    with handle:
+        reader = csv.reader(handle, delimiter="\t")
+        try:
+            header = next(reader)
+        except StopIteration as error:
+            raise ValueError(f"Empty TF-IDF label table: {path}") from error
+        if not header or header[0] != "id" or len(header) < 2:
+            raise ValueError(f"Unexpected TF-IDF label header in {path}")
+        labels = header[1:]
+        for row_number, row in enumerate(reader, 2):
+            if len(row) != len(header):
+                raise ValueError(f"Malformed TF-IDF row {row_number} in {path}")
+            item_id = row[0]
+            if item_id not in selected_ids:
+                continue
+            weighted = []
+            for label, raw_score in zip(labels, row[1:]):
+                try:
+                    score = float(raw_score)
+                except ValueError as error:
+                    raise ValueError(
+                        f"Invalid TF-IDF score for {item_id}/{label}: {raw_score!r}"
+                    ) from error
+                if score > 0:
+                    weighted.append((label, score))
+            weighted.sort(key=lambda value: (-value[1], value[0].casefold()))
+            output[item_id] = [label for label, _ in weighted[:max_labels]]
+    return output
+
+
+def _merge_labels(*groups: list[str]) -> list[str]:
+    output = []
+    seen = set()
+    for group in groups:
+        for label in group:
+            normalized = label.casefold()
+            if label and normalized not in seen:
+                seen.add(normalized)
+                output.append(label)
+    return output
+
+
 def _load_mapping(path: Path, include_relaxed: bool) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
@@ -153,8 +206,10 @@ def build_catalog(
     information: dict[str, dict[str, str]],
     metadata: dict[str, dict[str, str]],
     tags: dict[str, list[str]] | None = None,
+    genres: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, dict], list[dict], list[dict[str, str]]]:
     tags = tags or {}
+    genres = genres or {}
     catalog_metadata: dict[str, dict] = {}
     catalog: list[dict] = []
     for row in mapping_rows:
@@ -174,8 +229,8 @@ def build_catalog(
             "title": info.get("song", ""),
             "artist": info.get("artist", ""),
             "album": info.get("album_name", ""),
-            "genre": "",
-            "tags": tags.get(source, []),
+            "genre": genres.get(source, [""])[0] if genres.get(source) else "",
+            "tags": _merge_labels(genres.get(source, []), tags.get(source, [])),
             "mood": "",
             "tempo": tempo,
             "key": _key_label(meta),
@@ -212,8 +267,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--music4all-information", type=Path, required=True)
     parser.add_argument("--music4all-metadata", type=Path, required=True)
     parser.add_argument("--music4all-tags", type=Path)
+    parser.add_argument("--music4all-genres", type=Path)
     parser.add_argument("--music4all-lyrics-dir", type=Path)
     parser.add_argument("--max-tags", type=int, default=16)
+    parser.add_argument("--max-genres", type=int, default=4)
     parser.add_argument("--lyric-excerpt-chars", type=int, default=500)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--include-relaxed", action="store_true")
@@ -239,6 +296,12 @@ def main() -> int:
     )
     if tags_path is not None and not tags_path.is_file():
         raise FileNotFoundError(tags_path)
+    genres_path = (
+        args.music4all_genres.expanduser().resolve()
+        if args.music4all_genres is not None else None
+    )
+    if genres_path is not None and not genres_path.is_file():
+        raise FileNotFoundError(genres_path)
     lyrics_dir = (
         args.music4all_lyrics_dir.expanduser().resolve()
         if args.music4all_lyrics_dir is not None else None
@@ -275,8 +338,15 @@ def main() -> int:
             _read_weighted_tags(tags_path, selected_source_ids, args.max_tags)
             if tags_path is not None else {}
         )
+        genres = (
+            _read_tfidf_labels(
+                genres_path, selected_source_ids, args.max_genres,
+            )
+            if genres_path is not None else {}
+        )
         catalog_metadata, catalog, observed_mapping = build_catalog(
-            mapping_rows, ddbc_metadata, ddbc_tokens, information, metadata, tags,
+            mapping_rows, ddbc_metadata, ddbc_tokens, information, metadata,
+            tags, genres,
         )
         lyric_count = 0
         if lyrics_dir is not None:
@@ -317,7 +387,12 @@ def main() -> int:
             ),
             "catalog_items": len(catalog),
             "mapped_events": total_events,
-            "items_with_weighted_tags": sum(bool(item["tags"]) for item in catalog),
+            "items_with_weighted_tags": sum(
+                bool(tags.get(item["source_music4all_id"])) for item in catalog
+            ),
+            "items_with_genres": sum(
+                bool(genres.get(item["source_music4all_id"])) for item in catalog
+            ),
             "items_with_processed_lyrics": lyric_count,
             "source_music4all_items": len({
                 item["source_music4all_id"] for item in catalog
@@ -337,6 +412,7 @@ def main() -> int:
         }
         for name, path in {
             "music4all_tags": tags_path,
+            "music4all_genres": genres_path,
         }.items():
             if path is not None:
                 stats["sources"][name] = {
