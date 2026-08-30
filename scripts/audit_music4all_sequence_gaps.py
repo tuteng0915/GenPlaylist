@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, deque
+import csv
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -23,6 +24,7 @@ REFERENCE_ITEMS = 15
 TARGET_ITEMS = 5
 CAP_CANDIDATES = (16, 32, 64, 100, 200)
 SCHEMA = "genplaylist-music4all-gap-audit-v1"
+SUPPORT_CUTOFFS = (1, 2, 5, 10, 20, 50, 100, 200, 500)
 
 
 def _atomic_json(path: Path, value: dict) -> None:
@@ -32,6 +34,42 @@ def _atomic_json(path: Path, value: dict) -> None:
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     os.replace(temporary, path)
+
+
+def _atomic_support_csv(path: Path, rows: list[dict[str, int | str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=(
+            "item_id", "train_target_occurrences", "train_target_windows",
+            "train_target_users",
+        ))
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(temporary, path)
+
+
+def _percentiles(values: list[int]) -> dict[str, int]:
+    if not values:
+        return {
+            name: 0 for name in
+            ("min", "p25", "p50", "p75", "p90", "p95", "p99", "max")
+        }
+    ordered = sorted(values)
+
+    def nearest(fraction: float) -> int:
+        return ordered[round(fraction * (len(ordered) - 1))]
+
+    return {
+        "min": ordered[0],
+        "p25": nearest(0.25),
+        "p50": nearest(0.50),
+        "p75": nearest(0.75),
+        "p90": nearest(0.90),
+        "p95": nearest(0.95),
+        "p99": nearest(0.99),
+        "max": ordered[-1],
+    }
 
 
 def _parse_thresholds(value: str) -> tuple[int | None, ...]:
@@ -85,7 +123,15 @@ def _audit_sorted(
     progress_every: int,
     min_unique_references: int = 1,
     min_unique_targets: int = 1,
+    item_support_threshold: int | None = None,
+    item_support_output: Path | None = None,
 ) -> dict:
+    if (
+        item_support_output is not None
+        and item_support_threshold not in thresholds
+    ):
+        raise ValueError(
+            "Item-support threshold must be one of the audited thresholds")
     states = {
         threshold: deque(maxlen=WINDOW_ITEMS) for threshold in thresholds
     }
@@ -93,31 +139,40 @@ def _audit_sorted(
     user_windows = {threshold: 0 for threshold in thresholds}
     user_qualifying_windows = {threshold: 0 for threshold in thresholds}
     current_user: str | None = None
+    current_user_split = ""
     gap_since_mapped = 0
     seen_mapped = False
     total_events = 0
     mapped_events = 0
+    support_observed_items: set[str] = set()
+    support_target_occurrences: Counter[str] = Counter()
+    support_target_windows: Counter[str] = Counter()
+    support_target_users: Counter[str] = Counter()
+    support_user_targets: set[str] = set()
 
     def finalize_user() -> None:
+        nonlocal support_user_targets
         if current_user is None:
             return
-        user_split = _split(current_user, seed, test_fraction)
+        if current_user_split == "train":
+            support_target_users.update(support_user_targets)
+        support_user_targets = set()
         for threshold in thresholds:
             count = user_windows[threshold]
             if not count:
                 continue
-            stats[threshold]["eligible_users_by_split"][user_split] += 1
-            stats[threshold]["eligible_windows_by_split"][user_split] += count
-            if user_split == "train":
+            stats[threshold]["eligible_users_by_split"][current_user_split] += 1
+            stats[threshold]["eligible_windows_by_split"][current_user_split] += count
+            if current_user_split == "train":
                 stats[threshold]["train_window_counts"].append(count)
             qualifying_count = user_qualifying_windows[threshold]
             if not qualifying_count:
                 continue
-            stats[threshold]["qualifying_users_by_split"][user_split] += 1
-            stats[threshold]["qualifying_windows_by_split"][user_split] += (
+            stats[threshold]["qualifying_users_by_split"][current_user_split] += 1
+            stats[threshold]["qualifying_windows_by_split"][current_user_split] += (
                 qualifying_count
             )
-            if user_split == "train":
+            if current_user_split == "train":
                 stats[threshold]["qualifying_train_window_counts"].append(
                     qualifying_count
                 )
@@ -132,6 +187,7 @@ def _audit_sorted(
             if user_id != current_user:
                 finalize_user()
                 current_user = user_id
+                current_user_split = _split(user_id, seed, test_fraction)
                 gap_since_mapped = 0
                 seen_mapped = False
                 states = {
@@ -148,6 +204,8 @@ def _audit_sorted(
                 continue
 
             mapped_events += 1
+            if item_support_output is not None:
+                support_observed_items.add(item_id)
             for threshold in thresholds:
                 sequence = states[threshold]
                 if (
@@ -192,6 +250,14 @@ def _audit_sorted(
                     current[
                         "qualifying_windows_with_target_reference_overlap"
                     ] += any(item in reference_set for item in targets)
+                    if (
+                        item_support_output is not None
+                        and threshold == item_support_threshold
+                        and current_user_split == "train"
+                    ):
+                        support_target_occurrences.update(targets)
+                        support_target_windows.update(set(targets))
+                        support_user_targets.update(targets)
             seen_mapped = True
             gap_since_mapped = 0
             if progress_every and total_events % progress_every == 0:
@@ -260,11 +326,56 @@ def _audit_sorted(
             ),
         }
         output["all" if threshold is None else str(threshold)] = current
-    return {
+    result = {
         "total_events": total_events,
         "mapped_events": mapped_events,
         "thresholds": output,
     }
+    if item_support_output is not None:
+        def item_order(item_id: str) -> tuple[int, int | str]:
+            return (0, int(item_id)) if item_id.isdigit() else (1, item_id)
+
+        support_rows = [
+            {
+                "item_id": item_id,
+                "train_target_occurrences": support_target_occurrences[item_id],
+                "train_target_windows": support_target_windows[item_id],
+                "train_target_users": support_target_users[item_id],
+            }
+            for item_id in sorted(support_observed_items, key=item_order)
+        ]
+        _atomic_support_csv(item_support_output, support_rows)
+        positive_user_support = [
+            support_target_users[item_id]
+            for item_id in support_observed_items
+            if support_target_users[item_id] > 0
+        ]
+        result["sequence_target_support"] = {
+            "gap_threshold": (
+                "all" if item_support_threshold is None
+                else item_support_threshold
+            ),
+            "definition": (
+                "Support is computed only from qualifying target positions of "
+                "training users; each item is counted at most once per window "
+                "and once per user for the corresponding statistics."
+            ),
+            "observed_mapped_items": len(support_observed_items),
+            "items_with_positive_train_target_user_support": len(
+                positive_user_support
+            ),
+            "train_target_user_support_percentiles_positive": _percentiles(
+                positive_user_support
+            ),
+            "items_by_minimum_train_target_users": {
+                str(cutoff): sum(
+                    value >= cutoff for value in positive_user_support
+                )
+                for cutoff in SUPPORT_CUTOFFS
+            },
+            "item_support_output": str(item_support_output),
+        }
+    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -276,6 +387,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--min-unique-references", type=int, default=1)
     parser.add_argument("--min-unique-targets", type=int, default=1)
+    parser.add_argument("--item-support-output", type=Path)
+    parser.add_argument(
+        "--item-support-threshold", default="5",
+        help="Gap threshold whose qualifying training targets define item support.")
     parser.add_argument("--progress-every", type=int, default=5_000_000)
     return parser.parse_args()
 
@@ -296,9 +411,15 @@ def main() -> int:
     if not sorted_path.is_file():
         raise FileNotFoundError(sorted_path)
     thresholds = _parse_thresholds(args.thresholds)
+    item_support_threshold = _parse_thresholds(args.item_support_threshold)[0]
     result = _audit_sorted(
         sorted_path, thresholds, args.seed, args.test_fraction,
         args.progress_every, args.min_unique_references, args.min_unique_targets,
+        item_support_threshold,
+        (
+            args.item_support_output.expanduser().resolve()
+            if args.item_support_output is not None else None
+        ),
     )
     payload = {
         "result_schema": SCHEMA,

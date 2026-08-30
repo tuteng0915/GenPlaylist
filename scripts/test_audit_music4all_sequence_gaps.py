@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -62,8 +63,34 @@ def test_diversity_filter_is_reported_separately() -> None:
         assert current["qualifying_train_rows_by_cap"]["16"] == 0
 
 
+def test_train_target_support_is_sequence_based() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        path = root / "sorted.tsv"
+        support_path = root / "support.csv"
+        path.write_text("".join(
+            f"u\t2026-01-01 00:00:{index:02d}\t{index}\t{index}\n"
+            for index in range(20)
+        ), encoding="utf-8")
+        result = MODULE._audit_sorted(
+            path, (5,), seed=42, test_fraction=0.0, progress_every=0,
+            min_unique_references=8, min_unique_targets=3,
+            item_support_threshold=5, item_support_output=support_path,
+        )
+        with support_path.open(newline="", encoding="utf-8") as handle:
+            rows = {row["item_id"]: row for row in csv.DictReader(handle)}
+        assert rows["14"]["train_target_users"] == "0"
+        assert rows["15"]["train_target_occurrences"] == "1"
+        assert rows["15"]["train_target_windows"] == "1"
+        assert rows["15"]["train_target_users"] == "1"
+        support = result["sequence_target_support"]
+        assert support["observed_mapped_items"] == 20
+        assert support["items_with_positive_train_target_user_support"] == 5
+
+
 if __name__ == "__main__":
     test_gap_threshold_changes_eligibility()
     test_threshold_parser()
     test_diversity_filter_is_reported_separately()
+    test_train_target_support_is_sequence_based()
     print("Music4All sequence gap audit tests passed")
