@@ -62,6 +62,17 @@ def main() -> int:
     expected_counts = {"train": int(counts["train"]), "test": int(counts["test"])}
     if min(expected_counts.values()) <= 0:
         raise ValueError(f"Invalid sequence counts: {expected_counts}")
+    catalog_metadata_path = catalog_dir / "catalog_metadata.json"
+    catalog_metadata = json.loads(catalog_metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(catalog_metadata, (dict, list)) or not catalog_metadata:
+        raise ValueError("Catalog metadata must be a non-empty object or list")
+    catalog_items = len(catalog_metadata)
+    accepted_items = int(sequence_manifest["configuration"]["accepted_mapping_items"])
+    if accepted_items != catalog_items:
+        raise ValueError(
+            "Sequence mapping and materialized catalog differ: "
+            f"mapping={accepted_items}, catalog={catalog_items}"
+        )
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(
@@ -94,9 +105,8 @@ def main() -> int:
             "source_user_split": "80/20 user-disjoint train/test; validation is empty",
             "eligible_users": sequence_manifest["scan"]["eligible_users_by_split"],
             "catalog": {
-                "genplaylist_items": 5119,
-                "accepted_music4all_items": sequence_manifest["configuration"][
-                    "accepted_mapping_items"],
+                "genplaylist_items": catalog_items,
+                "accepted_music4all_items": accepted_items,
             },
             "sequence_protocol": sequence_manifest["protocol"],
             "sequence_configuration": sequence_manifest["configuration"],

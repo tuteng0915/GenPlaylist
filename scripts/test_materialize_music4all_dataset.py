@@ -34,11 +34,14 @@ def test_materialization() -> None:
             path = sequence / "splits" / f"{split}.txt"
             path.write_text(text, encoding="utf-8")
             split_entries[split] = {"sha256": _sha256(path)}
-        (catalog / "catalog_metadata.json").write_text("{}\n", encoding="utf-8")
+        (catalog / "catalog_metadata.json").write_text(
+            json.dumps({"0": {"item_id": "0"}, "1": {"item_id": "1"}}) + "\n",
+            encoding="utf-8",
+        )
         manifest = {
             "result_schema": "genplaylist-music4all-sequences-v1",
             "configuration": {
-                "seed": 42, "accepted_mapping_items": 2754,
+                "seed": 42, "accepted_mapping_items": 2,
                 "train_user_cap": 16, "max_skipped_events": 5,
                 "min_unique_references": 8, "min_unique_targets": 3,
             },
@@ -60,6 +63,9 @@ def test_materialization() -> None:
         ], check=True, capture_output=True, text=True)
         card = json.loads((output / "dataset_card.json").read_text(encoding="utf-8"))
         assert card["wp_c_split_counts"] == {"train": 1, "test": 1}
+        assert card["catalog"] == {
+            "genplaylist_items": 2, "accepted_music4all_items": 2,
+        }
         assert (output / "splits" / "val.txt").read_text() == ""
 
 
