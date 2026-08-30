@@ -113,17 +113,58 @@ def _unique_key_matches(
     }
 
 
+def _unique_album_matches(
+    current: dict[str, dict], music4all: list[dict[str, str]],
+) -> dict[str, str]:
+    """Resolve remaining artist/title duplicates with a non-empty album key."""
+    current_by_key: dict[tuple[str, str, str], list[str]] = {}
+    music4all_by_key: dict[tuple[str, str, str], list[str]] = {}
+    for item_id, item in current.items():
+        album = _normalize(item.get("album"))
+        if not album:
+            continue
+        key = (
+            _normalize(item.get("artist")),
+            _normalize(item.get("title")),
+            album,
+        )
+        current_by_key.setdefault(key, []).append(item_id)
+    for item in music4all:
+        album = _normalize(item.get("album_name"))
+        if not album:
+            continue
+        key = (_normalize(item.get("artist")), _normalize(item.get("song")), album)
+        music4all_by_key.setdefault(key, []).append(str(item["id"]))
+    return {
+        music4all_ids[0]: current_ids[0]
+        for key, current_ids in current_by_key.items()
+        if len(current_ids) == 1
+        and len(music4all_ids := music4all_by_key.get(key, [])) == 1
+    }
+
+
 def _build_mapping(
     current: dict[str, dict],
     music4all: list[dict[str, str]],
     metadata: list[dict[str, str]],
 ) -> tuple[dict[str, str], list[dict], dict]:
-    strict = _unique_key_matches(current, music4all, relaxed=False)
+    strict_direct = _unique_key_matches(current, music4all, relaxed=False)
     remaining_current = {
         item_id: item for item_id, item in current.items()
-        if item_id not in set(strict.values())
+        if item_id not in set(strict_direct.values())
     }
-    remaining_music4all = [item for item in music4all if item["id"] not in strict]
+    remaining_music4all = [
+        item for item in music4all if item["id"] not in strict_direct
+    ]
+    strict_album = _unique_album_matches(remaining_current, remaining_music4all)
+    strict = {**strict_direct, **strict_album}
+    remaining_current = {
+        item_id: item for item_id, item in remaining_current.items()
+        if item_id not in set(strict_album.values())
+    }
+    remaining_music4all = [
+        item for item in remaining_music4all if item["id"] not in strict_album
+    ]
     relaxed = _unique_key_matches(
         remaining_current, remaining_music4all, relaxed=True)
     mapping = {**strict, **relaxed}
@@ -136,6 +177,13 @@ def _build_mapping(
             "music4all_id": music4all_id,
             "genplaylist_item_id": current_id,
             "match_type": "strict" if music4all_id in strict else "relaxed-version",
+            "match_detail": (
+                "artist-title-one-to-one"
+                if music4all_id in strict_direct
+                else "artist-title-album-one-to-one"
+                if music4all_id in strict_album
+                else "version-normalized-one-to-one"
+            ),
             "artist": info["artist"],
             "title": info["song"],
             "spotify_id": metadata_by_id.get(music4all_id, {}).get("spotify_id", ""),
@@ -144,6 +192,8 @@ def _build_mapping(
         "genplaylist_catalog_items": len(current),
         "music4all_catalog_items": len(music4all),
         "strict_one_to_one_matches": len(strict),
+        "strict_artist_title_matches": len(strict_direct),
+        "strict_album_resolved_matches": len(strict_album),
         "additional_relaxed_version_matches": len(relaxed),
         "accepted_one_to_one_matches": len(mapping),
         "accepted_genplaylist_catalog_fraction": len(mapping) / len(current),

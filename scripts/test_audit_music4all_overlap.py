@@ -37,6 +37,23 @@ def test_only_one_to_one_keys_are_accepted() -> None:
     assert MODULE._unique_key_matches(current, music4all, relaxed=False) == {"a": "1"}
 
 
+def test_album_resolves_artist_title_duplicates() -> None:
+    current = {
+        "1": {"artist": "Artist", "title": "Song", "album": "First"},
+        "2": {"artist": "Artist", "title": "Song", "album": "Second"},
+    }
+    music4all = [
+        {"id": "a", "artist": "Artist", "song": "Song", "album_name": "First"},
+        {"id": "b", "artist": "Artist", "song": "Song", "album_name": "Second"},
+    ]
+    assert MODULE._unique_key_matches(current, music4all, relaxed=False) == {}
+    assert MODULE._unique_album_matches(current, music4all) == {"a": "1", "b": "2"}
+    mapping, records, stats = MODULE._build_mapping(current, music4all, [])
+    assert mapping == {"a": "1", "b": "2"}
+    assert stats["strict_album_resolved_matches"] == 2
+    assert {record["match_type"] for record in records} == {"strict"}
+
+
 def test_legacy_ddbc_metadata_catalog_is_supported() -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "metadata.json"
@@ -72,6 +89,7 @@ def test_interaction_stats_distinguish_filtered_and_contiguous_windows() -> None
 if __name__ == "__main__":
     test_version_normalization_is_separate_from_strict_matching()
     test_only_one_to_one_keys_are_accepted()
+    test_album_resolves_artist_title_duplicates()
     test_legacy_ddbc_metadata_catalog_is_supported()
     test_interaction_stats_distinguish_filtered_and_contiguous_windows()
     print("Music4All overlap audit tests passed")
