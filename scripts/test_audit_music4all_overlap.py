@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import bz2
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 
@@ -36,6 +37,17 @@ def test_only_one_to_one_keys_are_accepted() -> None:
     assert MODULE._unique_key_matches(current, music4all, relaxed=False) == {"a": "1"}
 
 
+def test_legacy_ddbc_metadata_catalog_is_supported() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "metadata.json"
+        path.write_text(json.dumps({
+            "0": "'Title' by Artist in album'Album'",
+        }), encoding="utf-8")
+        assert MODULE._load_catalog(path) == {
+            "0": {"title": "Title", "artist": "Artist", "album": "Album"},
+        }
+
+
 def test_interaction_stats_distinguish_filtered_and_contiguous_windows() -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "events.tsv.bz2"
@@ -47,8 +59,10 @@ def test_interaction_stats_distinguish_filtered_and_contiguous_windows() -> None
             rows.append(f"u\tm\t2026-01-01 00:00:{index:02d}\n")
         with bz2.open(path, "wt", encoding="utf-8") as handle:
             handle.writelines(rows)
-        result = MODULE._interaction_stats(path, {"m"})
+        event_counts = {}
+        result = MODULE._interaction_stats(path, {"m"}, event_counts)
         assert result["mapped_events"] == 21
+        assert event_counts == {"m": 21}
         assert result["filtered_subsequence_length20_windows"] == 2
         assert result["contiguous_supported_length20_windows"] == 0
         assert result["rows_grouped_by_user"] is True
@@ -58,5 +72,6 @@ def test_interaction_stats_distinguish_filtered_and_contiguous_windows() -> None
 if __name__ == "__main__":
     test_version_normalization_is_separate_from_strict_matching()
     test_only_one_to_one_keys_are_accepted()
+    test_legacy_ddbc_metadata_catalog_is_supported()
     test_interaction_stats_distinguish_filtered_and_contiguous_windows()
     print("Music4All overlap audit tests passed")

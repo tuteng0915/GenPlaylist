@@ -58,7 +58,31 @@ def _relaxed_title(value: object) -> str:
 def _load_catalog(path: Path) -> dict[str, dict]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(raw, dict):
-        return {str(item_id): dict(value) for item_id, value in raw.items()}
+        output = {}
+        metadata_pattern = re.compile(
+            r"'(.+?)'\s+by\s+(.+?)\s+in\s+album'(.+?)'$"
+        )
+        for item_id, value in raw.items():
+            if isinstance(value, dict):
+                output[str(item_id)] = dict(value)
+                continue
+            if isinstance(value, str):
+                match = metadata_pattern.match(value)
+                if match is None:
+                    raise ValueError(
+                        f"Cannot parse legacy DDBC metadata for item {item_id}: "
+                        f"{value!r}"
+                    )
+                output[str(item_id)] = {
+                    "title": match.group(1),
+                    "artist": match.group(2),
+                    "album": match.group(3),
+                }
+                continue
+            raise ValueError(
+                f"Catalog item {item_id} must be an object or DDBC metadata string"
+            )
+        return output
     if isinstance(raw, list):
         return {str(value["item_id"]): dict(value) for value in raw}
     raise ValueError("GenPlaylist catalog must be a JSON object or list")
@@ -129,7 +153,11 @@ def _build_mapping(
     return mapping, records, stats
 
 
-def _interaction_stats(path: Path, mapped_ids: set[str]) -> dict:
+def _interaction_stats(
+    path: Path,
+    mapped_ids: set[str],
+    event_counts: dict[str, int] | None = None,
+) -> dict:
     total_events = 0
     mapped_events = 0
     users: set[str] = set()
@@ -178,6 +206,8 @@ def _interaction_stats(path: Path, mapped_ids: set[str]) -> dict:
             previous_timestamp = timestamp
             if track_id in mapped_ids:
                 mapped_events += 1
+                if event_counts is not None:
+                    event_counts[track_id] = event_counts.get(track_id, 0) + 1
                 mapped_counts[user_id] = mapped_counts.get(user_id, 0) + 1
                 current_streak += 1
                 if current_streak >= WINDOW_ITEMS:
@@ -228,6 +258,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--music4all-information", type=Path, required=True)
     parser.add_argument("--music4all-metadata", type=Path, required=True)
     parser.add_argument("--interactions", type=Path)
+    parser.add_argument(
+        "--catalog-semantic-tokens", type=Path,
+        help=(
+            "Optional DDBC item-to-token JSON. When supplied, every mapped "
+            "GenPlaylist item must have a semantic-token row."
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mapping-output", type=Path, required=True)
     return parser.parse_args()
@@ -242,6 +279,17 @@ def main() -> int:
     music4all = _read_tsv(information_path)
     metadata = _read_tsv(metadata_path)
     mapping, records, overlap = _build_mapping(current, music4all, metadata)
+    if args.catalog_semantic_tokens is not None:
+        semantic_path = args.catalog_semantic_tokens.expanduser().resolve()
+        semantic_tokens = json.loads(semantic_path.read_text(encoding="utf-8"))
+        missing = sorted(set(mapping.values()) - {str(key) for key in semantic_tokens})
+        if missing:
+            raise ValueError(
+                f"Catalog semantic tokens are missing {len(missing)} mapped items: "
+                f"{missing[:10]}"
+            )
+        overlap["mapped_items_with_semantic_tokens"] = len(mapping)
+        overlap["catalog_semantic_token_items"] = len(semantic_tokens)
     payload = {
         "result_schema": "genplaylist-music4all-overlap-v1",
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -253,8 +301,30 @@ def main() -> int:
         "overlap": overlap,
     }
     if args.interactions is not None:
+        event_counts: dict[str, int] = {}
         payload["interactions"] = _interaction_stats(
-            args.interactions.expanduser().resolve(), set(mapping))
+            args.interactions.expanduser().resolve(), set(mapping), event_counts)
+        match_type_by_id = {
+            record["music4all_id"]: record["match_type"] for record in records
+        }
+        event_summary = {
+            match_type: {
+                "items_with_events": sum(
+                    event_counts.get(item_id, 0) > 0
+                    for item_id, current_type in match_type_by_id.items()
+                    if current_type == match_type
+                ),
+                "events": sum(
+                    event_counts.get(item_id, 0)
+                    for item_id, current_type in match_type_by_id.items()
+                    if current_type == match_type
+                ),
+            }
+            for match_type in ("strict", "relaxed-version")
+        }
+        payload["interactions"]["mapped_by_match_type"] = event_summary
+        for record in records:
+            record["event_count"] = event_counts.get(record["music4all_id"], 0)
     output_path = args.output.expanduser().resolve()
     _atomic_json(output_path, payload)
     mapping_path = args.mapping_output.expanduser().resolve()

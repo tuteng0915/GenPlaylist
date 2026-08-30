@@ -45,7 +45,25 @@ def test_threshold_parser() -> None:
     assert MODULE._parse_thresholds("0, 5, all") == (0, 5, None)
 
 
+def test_diversity_filter_is_reported_separately() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "sorted.tsv"
+        path.write_text("".join(
+            f"u\t2026-01-01 00:00:{index:02d}\t{index}\t{index % 2}\n"
+            for index in range(20)
+        ), encoding="utf-8")
+        result = MODULE._audit_sorted(
+            path, (0,), seed=42, test_fraction=0.0, progress_every=0,
+            min_unique_references=8, min_unique_targets=3,
+        )
+        current = result["thresholds"]["0"]
+        assert current["windows"] == 1
+        assert current["qualifying_windows"] == 0
+        assert current["qualifying_train_rows_by_cap"]["16"] == 0
+
+
 if __name__ == "__main__":
     test_gap_threshold_changes_eligibility()
     test_threshold_parser()
+    test_diversity_filter_is_reported_separately()
     print("Music4All sequence gap audit tests passed")
