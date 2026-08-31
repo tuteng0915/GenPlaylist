@@ -86,6 +86,27 @@ def _parse_thresholds(value: str) -> tuple[int | None, ...]:
     return tuple(output)
 
 
+def _load_allowed_items(path: Path, minimum_target_users: int) -> set[str]:
+    allowed: set[str] = set()
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        required = {"item_id", "train_target_users"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError(
+                f"Item-support table is missing columns {sorted(required)}")
+        for row in reader:
+            try:
+                support = int(row["train_target_users"])
+            except ValueError as error:
+                raise ValueError(
+                    f"Invalid train_target_users for item {row['item_id']}")
+            if support >= minimum_target_users:
+                allowed.add(row["item_id"])
+    if not allowed:
+        raise ValueError("Item-support threshold retained no items")
+    return allowed
+
+
 def _split(user_id: str, seed: int, test_fraction: float) -> str:
     digest = hashlib.sha256(
         f"split\0{seed}\0{user_id}".encode("utf-8")
@@ -112,6 +133,10 @@ def _new_stats() -> dict:
         "qualifying_users_by_split": Counter(),
         "qualifying_windows_by_split": Counter(),
         "qualifying_train_window_counts": [],
+        "candidate_window_counts_by_split": {"train": [], "test": []},
+        "qualifying_window_counts_by_split": {"train": [], "test": []},
+        "max_run_lengths_by_split": {"train": [], "test": []},
+        "users_with_run_at_least_20_by_split": Counter(),
     }
 
 
@@ -125,6 +150,7 @@ def _audit_sorted(
     min_unique_targets: int = 1,
     item_support_threshold: int | None = None,
     item_support_output: Path | None = None,
+    allowed_items: set[str] | None = None,
 ) -> dict:
     if (
         item_support_output is not None
@@ -138,8 +164,11 @@ def _audit_sorted(
     stats = {threshold: _new_stats() for threshold in thresholds}
     user_windows = {threshold: 0 for threshold in thresholds}
     user_qualifying_windows = {threshold: 0 for threshold in thresholds}
+    user_run_lengths = {threshold: 0 for threshold in thresholds}
+    user_max_run_lengths = {threshold: 0 for threshold in thresholds}
     current_user: str | None = None
     current_user_split = ""
+    current_user_mapped_events = 0
     gap_since_mapped = 0
     seen_mapped = False
     total_events = 0
@@ -149,6 +178,7 @@ def _audit_sorted(
     support_target_windows: Counter[str] = Counter()
     support_target_users: Counter[str] = Counter()
     support_user_targets: set[str] = set()
+    mapped_event_counts_by_split = {"train": [], "test": []}
 
     def finalize_user() -> None:
         nonlocal support_user_targets
@@ -157,23 +187,36 @@ def _audit_sorted(
         if current_user_split == "train":
             support_target_users.update(support_user_targets)
         support_user_targets = set()
+        mapped_event_counts_by_split[current_user_split].append(
+            current_user_mapped_events)
         for threshold in thresholds:
+            current = stats[threshold]
+            current["candidate_window_counts_by_split"][
+                current_user_split].append(user_windows[threshold])
+            current["qualifying_window_counts_by_split"][
+                current_user_split].append(user_qualifying_windows[threshold])
+            max_run_length = user_max_run_lengths[threshold]
+            current["max_run_lengths_by_split"][current_user_split].append(
+                max_run_length)
+            if max_run_length >= WINDOW_ITEMS:
+                current["users_with_run_at_least_20_by_split"][
+                    current_user_split] += 1
             count = user_windows[threshold]
             if not count:
                 continue
-            stats[threshold]["eligible_users_by_split"][current_user_split] += 1
-            stats[threshold]["eligible_windows_by_split"][current_user_split] += count
+            current["eligible_users_by_split"][current_user_split] += 1
+            current["eligible_windows_by_split"][current_user_split] += count
             if current_user_split == "train":
-                stats[threshold]["train_window_counts"].append(count)
+                current["train_window_counts"].append(count)
             qualifying_count = user_qualifying_windows[threshold]
             if not qualifying_count:
                 continue
-            stats[threshold]["qualifying_users_by_split"][current_user_split] += 1
-            stats[threshold]["qualifying_windows_by_split"][current_user_split] += (
+            current["qualifying_users_by_split"][current_user_split] += 1
+            current["qualifying_windows_by_split"][current_user_split] += (
                 qualifying_count
             )
             if current_user_split == "train":
-                stats[threshold]["qualifying_train_window_counts"].append(
+                current["qualifying_train_window_counts"].append(
                     qualifying_count
                 )
 
@@ -183,11 +226,14 @@ def _audit_sorted(
             if len(fields) != 4:
                 raise ValueError(f"Malformed sorted row {line_number}")
             user_id, _, _, item_id = fields
+            if item_id and allowed_items is not None and item_id not in allowed_items:
+                item_id = ""
             total_events += 1
             if user_id != current_user:
                 finalize_user()
                 current_user = user_id
                 current_user_split = _split(user_id, seed, test_fraction)
+                current_user_mapped_events = 0
                 gap_since_mapped = 0
                 seen_mapped = False
                 states = {
@@ -198,12 +244,19 @@ def _audit_sorted(
                 user_qualifying_windows = {
                     threshold: 0 for threshold in thresholds
                 }
+                user_run_lengths = {
+                    threshold: 0 for threshold in thresholds
+                }
+                user_max_run_lengths = {
+                    threshold: 0 for threshold in thresholds
+                }
             if not item_id:
                 if seen_mapped:
                     gap_since_mapped += 1
                 continue
 
             mapped_events += 1
+            current_user_mapped_events += 1
             if item_support_output is not None:
                 support_observed_items.add(item_id)
             for threshold in thresholds:
@@ -214,7 +267,13 @@ def _audit_sorted(
                     and gap_since_mapped > threshold
                 ):
                     sequence.clear()
+                    user_run_lengths[threshold] = 0
                 sequence.append(item_id)
+                user_run_lengths[threshold] += 1
+                user_max_run_lengths[threshold] = max(
+                    user_max_run_lengths[threshold],
+                    user_run_lengths[threshold],
+                )
                 if len(sequence) != WINDOW_ITEMS:
                     continue
                 items = tuple(sequence)
@@ -274,10 +333,16 @@ def _audit_sorted(
         train_counts = current.pop("train_window_counts")
         qualifying_windows = current["qualifying_windows"]
         qualifying_train_counts = current.pop("qualifying_train_window_counts")
+        candidate_counts_by_split = current.pop(
+            "candidate_window_counts_by_split")
+        qualifying_counts_by_split = current.pop(
+            "qualifying_window_counts_by_split")
+        max_run_lengths_by_split = current.pop("max_run_lengths_by_split")
         for name in (
             "unique_items_histogram", "unique_targets_histogram",
             "eligible_users_by_split", "eligible_windows_by_split",
             "qualifying_users_by_split", "qualifying_windows_by_split",
+            "users_with_run_at_least_20_by_split",
         ):
             current[name] = {
                 str(key): value for key, value in sorted(current[name].items())
@@ -289,6 +354,18 @@ def _audit_sorted(
         current["qualifying_train_rows_by_cap"] = {
             str(cap): sum(min(value, cap) for value in qualifying_train_counts)
             for cap in CAP_CANDIDATES
+        }
+        current["candidate_window_count_percentiles_by_split"] = {
+            split: _percentiles([value for value in values if value])
+            for split, values in candidate_counts_by_split.items()
+        }
+        current["qualifying_window_count_percentiles_by_split"] = {
+            split: _percentiles([value for value in values if value])
+            for split, values in qualifying_counts_by_split.items()
+        }
+        current["max_supported_run_length_percentiles_by_split"] = {
+            split: _percentiles(values)
+            for split, values in max_run_lengths_by_split.items()
         }
         current["fractions"] = {
             "all_20_items_unique": (
@@ -329,6 +406,12 @@ def _audit_sorted(
     result = {
         "total_events": total_events,
         "mapped_events": mapped_events,
+        "retained_catalog_items": (
+            len(allowed_items) if allowed_items is not None else None),
+        "mapped_event_count_percentiles_by_split": {
+            split: _percentiles(values)
+            for split, values in mapped_event_counts_by_split.items()
+        },
         "thresholds": output,
     }
     if item_support_output is not None:
@@ -391,6 +474,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--item-support-threshold", default="5",
         help="Gap threshold whose qualifying training targets define item support.")
+    parser.add_argument("--item-support-input", type=Path)
+    parser.add_argument("--minimum-train-target-users", type=int)
     parser.add_argument("--progress-every", type=int, default=5_000_000)
     return parser.parse_args()
 
@@ -412,6 +497,24 @@ def main() -> int:
         raise FileNotFoundError(sorted_path)
     thresholds = _parse_thresholds(args.thresholds)
     item_support_threshold = _parse_thresholds(args.item_support_threshold)[0]
+    if (args.item_support_input is None) != (
+        args.minimum_train_target_users is None
+    ):
+        raise ValueError(
+            "--item-support-input and --minimum-train-target-users must be "
+            "provided together")
+    if (
+        args.minimum_train_target_users is not None
+        and args.minimum_train_target_users < 1
+    ):
+        raise ValueError("--minimum-train-target-users must be positive")
+    allowed_items = (
+        _load_allowed_items(
+            args.item_support_input.expanduser().resolve(),
+            args.minimum_train_target_users,
+        )
+        if args.item_support_input is not None else None
+    )
     result = _audit_sorted(
         sorted_path, thresholds, args.seed, args.test_fraction,
         args.progress_every, args.min_unique_references, args.min_unique_targets,
@@ -420,6 +523,7 @@ def main() -> int:
             args.item_support_output.expanduser().resolve()
             if args.item_support_output is not None else None
         ),
+        allowed_items,
     )
     payload = {
         "result_schema": SCHEMA,
@@ -435,6 +539,15 @@ def main() -> int:
             "min_unique_references": args.min_unique_references,
             "min_unique_targets": args.min_unique_targets,
         },
+        "catalog_filter": (
+            {
+                "item_support_input": str(
+                    args.item_support_input.expanduser().resolve()),
+                "minimum_train_target_users": args.minimum_train_target_users,
+                "retained_items": len(allowed_items),
+            }
+            if allowed_items is not None else None
+        ),
         **result,
     }
     _atomic_json(args.output.expanduser().resolve(), payload)

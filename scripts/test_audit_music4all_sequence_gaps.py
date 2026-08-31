@@ -88,9 +88,41 @@ def test_train_target_support_is_sequence_based() -> None:
         assert support["items_with_positive_train_target_user_support"] == 5
 
 
+def test_catalog_filter_recomputes_sequence_lengths() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sorted_path = root / "sorted.tsv"
+        support_path = root / "support.csv"
+        sorted_path.write_text("".join(
+            f"u\t2026-01-01 00:00:{index:02d}\t{index}\t{index}\n"
+            for index in range(21)
+        ), encoding="utf-8")
+        support_path.write_text(
+            "item_id,train_target_users\n" + "".join(
+                f"{index},{0 if index == 10 else 100}\n"
+                for index in range(21)
+            ),
+            encoding="utf-8",
+        )
+        allowed = MODULE._load_allowed_items(support_path, 100)
+        result = MODULE._audit_sorted(
+            sorted_path, (5,), seed=42, test_fraction=0.0,
+            progress_every=0, min_unique_references=8,
+            min_unique_targets=3, allowed_items=allowed,
+        )
+        current = result["thresholds"]["5"]
+        assert result["retained_catalog_items"] == 20
+        assert result["mapped_events"] == 20
+        assert current["qualifying_windows"] == 1
+        assert current["users_with_run_at_least_20_by_split"]["train"] == 1
+        assert current["max_supported_run_length_percentiles_by_split"][
+            "train"]["p50"] == 20
+
+
 if __name__ == "__main__":
     test_gap_threshold_changes_eligibility()
     test_threshold_parser()
     test_diversity_filter_is_reported_separately()
     test_train_target_support_is_sequence_based()
+    test_catalog_filter_recomputes_sequence_lengths()
     print("Music4All sequence gap audit tests passed")
