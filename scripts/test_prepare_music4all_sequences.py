@@ -34,6 +34,7 @@ def test_mapping_defaults_to_strict() -> None:
             })
         assert MODULE._load_mapping(path, False) == {"a": "1"}
         assert MODULE._load_mapping(path, True) == {"a": "1", "b": "2"}
+        assert MODULE._load_mapping(path, True, {"2"}) == {"b": "2"}
 
 
 def test_sorted_scan_breaks_runs_and_retains_repeats() -> None:
@@ -115,9 +116,29 @@ def test_user_split_is_stable() -> None:
     assert "user" not in MODULE._pseudonym("user", 42)
 
 
+def test_support_filter_is_applied_to_reused_sorted_events() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sorted_path = root / "sorted.tsv"
+        sorted_path.write_text("".join(
+            f"u\t2026-01-01 00:00:{index:02d}\t{index}\t{index}\n"
+            for index in range(21)
+        ), encoding="utf-8")
+        result = MODULE._scan_sorted_events(
+            sorted_path, root / "train.txt", root / "test.txt",
+            seed=42, test_fraction=0.0, train_user_cap=16,
+            max_skipped_events=5, min_unique_references=8,
+            min_unique_targets=3, progress_every=0,
+            allowed_items={str(index) for index in range(21) if index != 10},
+        )
+        assert result["mapped_events"] == 20
+        assert result["eligible_windows_by_split"]["train"] == 1
+
+
 if __name__ == "__main__":
     test_mapping_defaults_to_strict()
     test_sorted_scan_breaks_runs_and_retains_repeats()
     test_gap_and_diversity_constraints()
     test_user_split_is_stable()
+    test_support_filter_is_applied_to_reused_sorted_events()
     print("Music4All sequence preparation tests passed")

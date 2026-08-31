@@ -62,6 +62,11 @@ def test_mapping_filter_rejects_unobserved_and_relaxed_rows() -> None:
             row["genplaylist_item_id"]
             for row in MODULE._load_mapping(path, include_relaxed=True)
         ] == ["1", "3"]
+        assert [
+            row["genplaylist_item_id"]
+            for row in MODULE._load_mapping(
+                path, include_relaxed=True, allowed_items={"3"})
+        ] == ["3"]
 
 
 def test_weighted_tags_are_ranked_deterministically() -> None:

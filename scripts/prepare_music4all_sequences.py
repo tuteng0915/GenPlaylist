@@ -48,7 +48,32 @@ def _atomic_json(path: Path, value: dict) -> None:
     os.replace(temporary, path)
 
 
-def _load_mapping(path: Path, include_relaxed: bool) -> dict[str, str]:
+def _load_allowed_items(path: Path, minimum_target_users: int) -> set[str]:
+    allowed: set[str] = set()
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        required = {"item_id", "train_target_users"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError(
+                f"Item-support table is missing columns {sorted(required)}")
+        for row in reader:
+            try:
+                support = int(row["train_target_users"])
+            except ValueError as error:
+                raise ValueError(
+                    f"Invalid train_target_users for item {row['item_id']}")
+            if support >= minimum_target_users:
+                allowed.add(row["item_id"])
+    if not allowed:
+        raise ValueError("Item-support threshold retained no items")
+    return allowed
+
+
+def _load_mapping(
+    path: Path,
+    include_relaxed: bool,
+    allowed_items: set[str] | None = None,
+) -> dict[str, str]:
     mapping: dict[str, str] = {}
     reverse: dict[str, str] = {}
     with path.open(newline="", encoding="utf-8") as handle:
@@ -63,6 +88,8 @@ def _load_mapping(path: Path, include_relaxed: bool) -> dict[str, str]:
                 continue
             source = row["music4all_id"]
             target = row["genplaylist_item_id"]
+            if allowed_items is not None and target not in allowed_items:
+                continue
             if source in mapping:
                 raise ValueError(f"Duplicate Music4All mapping: {source}")
             if target in reverse:
@@ -231,6 +258,7 @@ def _scan_sorted_events(
     min_unique_references: int,
     min_unique_targets: int,
     progress_every: int,
+    allowed_items: set[str] | None = None,
 ) -> dict:
     """Consume a sorted event table and write capped train/latest-test windows."""
     train_output.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +334,8 @@ def _scan_sorted_events(
             if len(fields) != 4:
                 raise ValueError(f"Malformed sorted event row {line_number}")
             user_id, timestamp, source_row_text, item_id = fields
+            if item_id and allowed_items is not None and item_id not in allowed_items:
+                item_id = ""
             try:
                 source_row = int(source_row_text)
             except ValueError as error:
@@ -430,6 +460,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-unique-references", type=int, default=1)
     parser.add_argument("--min-unique-targets", type=int, default=1)
     parser.add_argument("--include-relaxed", action="store_true")
+    parser.add_argument("--item-support-input", type=Path)
+    parser.add_argument("--minimum-train-target-users", type=int)
     parser.add_argument("--reuse-spool", action="store_true")
     parser.add_argument("--reuse-sorted", action="store_true")
     parser.add_argument("--keep-intermediate", action="store_true")
@@ -454,12 +486,29 @@ def main() -> int:
             f"min-unique-references must be in [1, {REFERENCE_ITEMS}]")
     if not 1 <= args.min_unique_targets <= TARGET_ITEMS:
         raise ValueError(f"min-unique-targets must be in [1, {TARGET_ITEMS}]")
+    if (args.item_support_input is None) != (
+        args.minimum_train_target_users is None
+    ):
+        raise ValueError(
+            "--item-support-input and --minimum-train-target-users must be "
+            "provided together")
+    if (
+        args.minimum_train_target_users is not None
+        and args.minimum_train_target_users < 1
+    ):
+        raise ValueError("--minimum-train-target-users must be positive")
     interactions = args.interactions.expanduser().resolve()
     mapping_path = args.mapping.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     work_dir = args.work_dir.expanduser().resolve()
     if not interactions.is_file() or not mapping_path.is_file():
         raise FileNotFoundError("Interactions and mapping files must exist")
+    item_support_path = (
+        args.item_support_input.expanduser().resolve()
+        if args.item_support_input is not None else None
+    )
+    if item_support_path is not None and not item_support_path.is_file():
+        raise FileNotFoundError(item_support_path)
     if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
         raise FileExistsError(
             f"Output directory is not empty: {output_dir}; use --overwrite"
@@ -468,7 +517,13 @@ def main() -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
     spool = work_dir / "events.unsorted.tsv"
     sorted_path = work_dir / "events.sorted.tsv"
-    mapping = _load_mapping(mapping_path, args.include_relaxed)
+    allowed_items = (
+        _load_allowed_items(
+            item_support_path, args.minimum_train_target_users)
+        if item_support_path is not None else None
+    )
+    mapping = _load_mapping(
+        mapping_path, args.include_relaxed, allowed_items)
     print(f"[mapping] accepted={len(mapping):,}", flush=True)
 
     spool_stats = None
@@ -504,6 +559,7 @@ def main() -> int:
         args.min_unique_references,
         args.min_unique_targets,
         args.progress_every,
+        allowed_items,
     )
     (splits_dir / "val.txt").write_text("", encoding="utf-8")
     manifest = {
@@ -521,7 +577,15 @@ def main() -> int:
                 f"at least {args.min_unique_references}/15 unique references and "
                 f"{args.min_unique_targets}/5 unique targets"
             ),
-            "mapping": "strict one-to-one" if not args.include_relaxed else "strict plus relaxed-version",
+            "mapping": (
+                "strict one-to-one"
+                if not args.include_relaxed else "strict plus relaxed-version"
+            ),
+            "catalog_filter": (
+                f"training target-user support >= "
+                f"{args.minimum_train_target_users}"
+                if allowed_items is not None else "event-supported mapping"
+            ),
             "split": "seeded SHA-256 user-disjoint 80/20 train/test" if args.test_fraction == 0.2 else "seeded SHA-256 user-disjoint train/test",
             "test_context": "latest eligible window per test user",
             "train_selection": "lowest seeded SHA-256 window priorities per user",
@@ -534,6 +598,7 @@ def main() -> int:
             "min_unique_references": args.min_unique_references,
             "min_unique_targets": args.min_unique_targets,
             "accepted_mapping_items": len(mapping),
+            "minimum_train_target_users": args.minimum_train_target_users,
         },
         "sources": {
             "interactions": {
@@ -562,6 +627,12 @@ def main() -> int:
             }.items()
         },
     }
+    if item_support_path is not None:
+        manifest["sources"]["item_support"] = {
+            "path": str(item_support_path),
+            "size_bytes": item_support_path.stat().st_size,
+            "sha256": _sha256(item_support_path),
+        }
     _atomic_json(output_dir / "sequence_manifest.json", manifest)
     print(json.dumps(scan, indent=2, sort_keys=True), flush=True)
 

@@ -139,7 +139,32 @@ def _merge_labels(*groups: list[str]) -> list[str]:
     return output
 
 
-def _load_mapping(path: Path, include_relaxed: bool) -> list[dict[str, str]]:
+def _load_allowed_items(path: Path, minimum_target_users: int) -> set[str]:
+    allowed: set[str] = set()
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        required = {"item_id", "train_target_users"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError(
+                f"Item-support table is missing columns {sorted(required)}")
+        for row in reader:
+            try:
+                support = int(row["train_target_users"])
+            except ValueError as error:
+                raise ValueError(
+                    f"Invalid train_target_users for item {row['item_id']}")
+            if support >= minimum_target_users:
+                allowed.add(row["item_id"])
+    if not allowed:
+        raise ValueError("Item-support threshold retained no items")
+    return allowed
+
+
+def _load_mapping(
+    path: Path,
+    include_relaxed: bool,
+    allowed_items: set[str] | None = None,
+) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         required = {
@@ -153,6 +178,11 @@ def _load_mapping(path: Path, include_relaxed: bool) -> list[dict[str, str]]:
     target_ids: set[str] = set()
     for row in rows:
         if row["match_type"] != "strict" and not include_relaxed:
+            continue
+        if (
+            allowed_items is not None
+            and row["genplaylist_item_id"] not in allowed_items
+        ):
             continue
         try:
             event_count = int(row["event_count"])
@@ -274,6 +304,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lyric-excerpt-chars", type=int, default=500)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--include-relaxed", action="store_true")
+    parser.add_argument("--item-support-input", type=Path)
+    parser.add_argument("--minimum-train-target-users", type=int)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -310,6 +342,23 @@ def main() -> int:
         raise FileNotFoundError(lyrics_dir)
     if args.lyric_excerpt_chars < 0:
         raise ValueError("lyric-excerpt-chars must be nonnegative")
+    if (args.item_support_input is None) != (
+        args.minimum_train_target_users is None
+    ):
+        raise ValueError(
+            "--item-support-input and --minimum-train-target-users must be "
+            "provided together")
+    if (
+        args.minimum_train_target_users is not None
+        and args.minimum_train_target_users < 1
+    ):
+        raise ValueError("--minimum-train-target-users must be positive")
+    item_support_path = (
+        args.item_support_input.expanduser().resolve()
+        if args.item_support_input is not None else None
+    )
+    if item_support_path is not None and not item_support_path.is_file():
+        raise FileNotFoundError(item_support_path)
     output_dir = args.output_dir.expanduser().resolve()
     if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
         raise FileExistsError(
@@ -320,7 +369,13 @@ def main() -> int:
         prefix=f".{output_dir.name}.tmp-", dir=output_dir.parent,
     ))
     try:
-        mapping_rows = _load_mapping(sources["mapping"], args.include_relaxed)
+        allowed_items = (
+            _load_allowed_items(
+                item_support_path, args.minimum_train_target_users)
+            if item_support_path is not None else None
+        )
+        mapping_rows = _load_mapping(
+            sources["mapping"], args.include_relaxed, allowed_items)
         ddbc_metadata = {
             str(key): str(value) for key, value in json.loads(
                 sources["ddbc_metadata"].read_text(encoding="utf-8")
@@ -387,6 +442,14 @@ def main() -> int:
             ),
             "catalog_items": len(catalog),
             "mapped_events": total_events,
+            "catalog_filter": (
+                {
+                    "minimum_train_target_users": (
+                        args.minimum_train_target_users),
+                    "retained_items": len(allowed_items),
+                }
+                if allowed_items is not None else None
+            ),
             "items_with_weighted_tags": sum(
                 bool(tags.get(item["source_music4all_id"])) for item in catalog
             ),
@@ -413,6 +476,7 @@ def main() -> int:
         for name, path in {
             "music4all_tags": tags_path,
             "music4all_genres": genres_path,
+            "item_support": item_support_path,
         }.items():
             if path is not None:
                 stats["sources"][name] = {
