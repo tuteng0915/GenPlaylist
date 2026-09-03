@@ -8,6 +8,11 @@ Level 2 — semantic retrieval (no LLM):
     assigned cues --embed--> query, artist-free song texts --embed--> candidates
     Reports whether the source song appears in the top K / at what rank.
 
+LLM judge (cue<->lyric match, on the eval sample):
+    An LLM is shown a song's assigned cues and its real lyrics and scores 1-5
+    how well the cues match the lyrics' content. See JUDGE_SYSTEM_PROMPT /
+    judge_prompt() and llm_judge_grounding().
+
 Level 3 — reconstruction ablation (the encode -> decode -> score loop):
     real lyrics --encode--> 8 cues --decode(LLM)--> regenerated lyrics
                             real lyrics <--BLEU/ROUGE/BERTScore-- regenerated
@@ -252,6 +257,75 @@ def level2_semantic_retrieval(
 
 # Backward-compatible alias for older run scripts.
 level3_semantic_retrieval = level2_semantic_retrieval
+
+
+# ---------------------------------------------------------------------------
+# LLM judge — does an LLM think the assigned cues match the real lyrics?
+# ---------------------------------------------------------------------------
+
+JUDGE_SYSTEM_PROMPT = (
+    "You are an expert music editor judging whether a short list of creative cue "
+    "phrases captures the imagery, themes, and content of a song's actual lyrics. "
+    "Score strictly: 5 means the cues are clearly drawn from and representative of "
+    "the lyrics; 3 means the cues are plausible but generic or only partially "
+    "reflect the lyrics; 1 means the cues are unrelated to or contradict the "
+    "lyrics. Respond with ONLY a single integer from 1 to 5, nothing else."
+)
+_JUDGE_LYRIC_CHARS = 2000
+_JUDGE_MAX_TOKENS = 5
+
+
+def judge_prompt(cue_strings: list[str], lyrics: str) -> str:
+    """User prompt for the LLM judge. Exposed so callers/reports can cite it verbatim."""
+    cue_part = ", ".join(cue_strings) if cue_strings else "(none)"
+    return (
+        f"Lyrics:\n{lyrics[:_JUDGE_LYRIC_CHARS]}\n\n"
+        f"Creative cues: {cue_part}\n\n"
+        "On a scale of 1-5, how well do these cues match the content of these lyrics? "
+        "Respond with ONLY the integer."
+    )
+
+
+def _parse_judge_score(resp: str) -> Optional[float]:
+    import re
+    m = re.search(r"[1-5]", resp)
+    return float(m.group()) if m else None
+
+
+def llm_judge_grounding(
+    item2cues: dict[str, CueMappingEntry],
+    vocab: list[str],
+    lyrics_dict: dict[str, str],
+    sample_ids: list[str],
+) -> dict:
+    """Mean LLM-judged 1-5 match score between each song's assigned cues and its real lyrics.
+
+    Scored over `sample_ids` (not the full set) since each song costs one chat call;
+    cached by cue_clients.chat like every other LLM call in this module.
+    """
+    scores: list[float] = []
+    for iid in sample_ids:
+        lyrics = lyrics_dict.get(iid, "")
+        entry = item2cues.get(iid)
+        if not lyrics.strip() or not entry:
+            continue
+        cue_strings = _cue_strings(entry, vocab)
+        if not cue_strings:
+            continue
+        resp = cue_clients.chat(
+            judge_prompt(cue_strings, lyrics),
+            system=JUDGE_SYSTEM_PROMPT, temperature=0.0, max_tokens=_JUDGE_MAX_TOKENS)
+        score = _parse_judge_score(resp)
+        if score is not None:
+            scores.append(score)
+
+    if not scores:
+        return {"llm_judge_mean": None, "llm_judge_n": 0, "llm_judge_model": cue_clients.CHAT_MODEL}
+    return {
+        "llm_judge_mean": round(float(np.mean(scores)), 3),
+        "llm_judge_n": len(scores),
+        "llm_judge_model": cue_clients.CHAT_MODEL,
+    }
 
 
 # ---------------------------------------------------------------------------

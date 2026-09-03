@@ -30,7 +30,10 @@ Two entry points share stages 0-3 via `pipeline.py`:
 
 Setup (once): create a venv and `pip install -r requirements.txt` into it, and set
 `OPENAI_API_KEY` in the environment or a repo-root `.env` file if you're using
-the `llm` method, Level 3 reconstruction, or the independent retrieval encoder.
+the `llm` method, Level 3 reconstruction, the LLM judge metric, or the
+independent retrieval encoder. Level 3 reconstruction and the LLM judge are
+both on by default in `run_compare.py` (see `--no-level3` / `--no-llm-judge`)
+but are silently skipped without a key.
 
 The commands below assume the venv is activated (`.venv\Scripts\activate` on
 Windows) so `python` resolves to the venv's interpreter.
@@ -63,17 +66,25 @@ preset, don't reach for a flag.
 
 ### Presets (`config.py`)
 
-| Preset | method | rank_by | num_cues | min_df | top_n | lyrics_mode |
+| Preset | method | rank_by | num_cues | min_df_frac | top_n | lyrics_mode |
 |---|---|---|---|---|---|---|
-| `default` | `llm` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
-| `tfidf` | `tfidf` | `idf` | **16 stored / 8 active** | 5 | 100 | `dedup` |
-| `research-18-cues` | `llm` | `idf` | 18 | 5 | 100 | `dedup` |
+| `default` | `llm` | `idf` | **16 stored / 8 active** | 0.002 | 100 | `dedup` |
+| `tfidf` | `tfidf` | `idf` | **16 stored / 8 active** | 0.002 | 100 | `dedup` |
+| `research-18-cues` | `llm` | `idf` | 18 | 0.002 | 100 | `dedup` |
 
 `default` is the WP-C-compatible production contract: a 2,048-entry cue
 vocabulary and a relevance-ranked **16-candidate table per song**. WP-C consumes
 the first 8 candidates, so 4/8/12/16-cue ablations share one frozen table.
 `tfidf` keeps the same interface as an API-free baseline. `research-18-cues` is
 an ablation only and does not match the frozen 16-candidate artifact contract.
+
+`min_df_frac` is corpus-relative, not a fixed count: the df-band floor actually
+applied is `min_df = max(2, round(min_df_frac * n_items))`, resolved at run time
+against however many songs this run actually builds from (respects `--limit`,
+so a smoke test doesn't inherit the full catalog's floor). On the current
+~5,119-song catalog, `0.002` resolves to `min_df=10`. Validated via a min_df
+ablation at two corpus sizes (N=2000 and N=5000) — see `sweeps/sweep_min_df.py`
+and `cue_normalize.resolve_min_df`'s docstring for the evidence and formula.
 
 Add a new preset in `config.py` (as a `replace(DEFAULT, ...)` entry in
 `PRESETS`) when a setting changes, rather than adding a new CLI flag.
@@ -126,12 +137,14 @@ everywhere else in the pipeline.
 ```
 
 **`run_config.json`** — every resolved `ProductionConfig` field (`method`,
-`limit`, `top_n`, `lyrics_mode`, `lyrics_cap`, `min_df`, `max_df_frac`,
+`limit`, `top_n`, `lyrics_mode`, `lyrics_cap`, `min_df_frac`, `max_df_frac`,
 `dedup_threshold`, `rank_by`, `vocab_size`, `num_cues`, `active_cues`,
 `assignment_strategy`, `candidate_k`, `embedder`, `force`) plus
-`preset`, `generated` (timestamp), `n_items`, `n_with_lyrics`. This is the
-source of truth for the `num_cues`/`vocab_size` a given `item2cues.json`/
-`cue_vocab.json` was built with.
+`preset`, `generated` (timestamp), `n_items`, `n_with_lyrics`, and `min_df` —
+the absolute df-band floor actually resolved from `min_df_frac * n_items` for
+*this* run (not itself a `ProductionConfig` field, since it depends on the
+corpus size at run time). This is the source of truth for the `num_cues`/
+`vocab_size`/`min_df` a given `item2cues.json`/`cue_vocab.json` was built with.
 
 **`health_report.md`** — human-readable only, not a stable machine schema.
 Coverage rate, UNK rate, vocab utilization, cue entropy, top-10 cues table.
@@ -166,7 +179,9 @@ Use this instead of `run_production.py` when you're deciding *between*
 methods or settings, not just building the deliverable. Runs one or more
 extraction methods through the same cleaning/assignment pipeline, then scores
 them: vocabulary health, cue diversity, Level 1 lexical grounding, Level 2
-semantic retrieval, and (optionally) Level 3 LLM reconstruction.
+semantic retrieval, an LLM judge score (cues vs. real lyrics, on by default),
+and Level 3 LLM reconstruction (also on by default). Both LLM-backed metrics
+cost API calls and are skipped automatically if `OPENAI_API_KEY` isn't set.
 
 ```bash
 python src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
@@ -186,8 +201,9 @@ python src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
 | `--lyrics-mode` | `cap` | `cap` \| `full` \| `dedup` \| `summarize` |
 | `--lyrics-cap N` | 2000 | Char cap for `cap`/`dedup` modes |
 | `--score-chars N` | `2000` | Common char window for Level 3 scoring (0 = full) |
-| `--eval-sample N` | `150` | Songs used for retrieval/reconstruction evaluation |
-| `--level3` | off | Run the LLM reconstruction ablation (costs API calls) |
+| `--eval-sample N` | `150` | Songs used for retrieval/judge/reconstruction evaluation |
+| `--level3` / `--no-level3` | **on** | Run the LLM reconstruction ablation (costs API calls; auto-skipped with no key) |
+| `--llm-judge` / `--no-llm-judge` | **on** | Run the LLM-judge grounding score — cues vs. real lyrics, rated 1-5 (costs API calls; auto-skipped with no key) |
 | `--llm-batch` | off | Submit `llm` extraction via the OpenAI Batch API |
 | `--recon-batch` | off | Run Level 3 reconstruction via the OpenAI Batch API |
 | `--recon-report-samples N` | `15` | Songs shown in the original-vs-regenerated report |
@@ -205,9 +221,12 @@ python src/02_creative_cues/run_compare.py --limit 1000 --methods tfidf,yake
 ### Examples
 
 ```bash
-# Full comparison across all four methods, with reconstruction
+# Full comparison across all four methods (reconstruction + LLM judge run by default)
 python src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm \
-    --eval-sample 200 --level3
+    --eval-sample 200
+
+# Skip the LLM-backed metrics entirely (no API calls, fastest/cheapest)
+python src/02_creative_cues/run_compare.py --methods tfidf,yake --no-level3 --no-llm-judge
 
 # LLM extraction via the async Batch API (large runs)
 python src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm --llm-batch
@@ -216,7 +235,7 @@ python src/02_creative_cues/run_compare.py --methods tfidf,yake,keybert,llm --ll
 python src/02_creative_cues/run_compare.py --methods tfidf,yake --held-out-eval --test-frac 0.15
 
 # Compare a ranking rule against the default
-python src/02_creative_cues/run_compare.py --methods tfidf --rank-by cluster --level3
+python src/02_creative_cues/run_compare.py --methods tfidf --rank-by cluster
 
 # Try a larger vocabulary
 python src/02_creative_cues/run_compare.py --methods tfidf --vocab-size 4096
@@ -227,7 +246,8 @@ python src/02_creative_cues/run_compare.py --methods tfidf --vocab-size 4096
 ```
 outputs/runs/<run_id>/
     comparison_report.md        # TL;DR, vocab health, cue quality, grounding+retrieval,
-                                 # reconstruction bracket, qualitative samples, appendix
+                                 # LLM judge score, reconstruction bracket, qualitative
+                                 # samples, appendix
     reconstruction_report.md    # side-by-side original vs regenerated lyrics (Level 3 only)
     run_config.json             # every CLI arg for this run
     methods/<method>/
@@ -314,11 +334,6 @@ python src/02_creative_cues/sweeps/sweep_ranking.py --method tfidf \
 `--eval-sample` (`100`) · `--lyrics-mode` (`dedup`) · `--lyrics-cap` (`2000`) · `--top-n` (`60`) ·
 `--seed` (`0`) · `--skip-retrieval` · `--force`
 
-> **Known caveat:** with the default `--dedup-threshold`/df-band settings, `df_idf` selects the
-> *identical* set as `df` (its score is monotonic in df across the whole df-band range at
-> `max_df_frac=0.3`) — see the note in the script's generated report before reading `df_idf` as a
-> distinct arm.
-
 ### `sweep_vocab_stability.py`
 
 ```bash
@@ -369,7 +384,7 @@ pipeline.py           shared extract -> clean -> assign -> export orchestration
 cue_extractors.py     Step 1 — tfidf / yake / keybert / llm raw-cue extraction
 cue_normalize.py       Step 2 — cleaning pipeline + stage-5 ranking rules
 cue_assign.py          Step 3 — MMR cue assignment
-cue_eval.py             Step 4 — Level 1/2/3 evaluation (run_compare.py / sweeps only)
+cue_eval.py             Step 4 — Level 1/2/3 evaluation + LLM judge (run_compare.py / sweeps only)
 cue_export.py           export_outputs / compute_coverage_stats / write_report
 cue_clients.py          shared OpenAI chat + embedding client (disk-memoized)
 cue_lyrics.py            lyrics preprocessing modes (cap / full / dedup / summarize)

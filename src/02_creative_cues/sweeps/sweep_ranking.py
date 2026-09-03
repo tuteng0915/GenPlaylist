@@ -263,7 +263,7 @@ def _write_report(args, arms, limits, vocab_sets, health, retrieval, rl):
         "| `random` | random K from the pool (seeded) | **ablation floor** — ranking removed |\n",
         "| `df` | highest document frequency first | frequency-only extreme |\n",
         "| `idf` | highest `log(N/(1+df))` — rarest first | **current behaviour** |\n",
-        "| `df_idf` | `df · log(N/(1+df))` | frequency × distinctiveness balance |\n",
+        "| `df_idf` | `df · log(band_cap/(1+df))` | frequency × distinctiveness balance |\n",
         "| `band` | closeness to a target prevalence `df/N` | corpus-size-invariant |\n",
         "| `cluster` | k-means into K clusters, one representative each | spanning codebook |\n",
         "\n**`random`** selects K cues uniformly at random from the cleaned pool. It removes the "
@@ -276,13 +276,13 @@ def _write_report(args, arms, limits, vocab_sets, health, retrieval, rl):
         "corpus-size-dependent and, at the extreme, it rewards noise — a one-off typo has the "
         "highest possible IDF.\n",
         "\n**`df_idf`** multiplies frequency by distinctiveness, so the score peaks at "
-        "*mid-frequency* cues: recurrent enough to generalise, rare enough to discriminate. "
-        "Mid-frequency cues scale proportionally with the corpus, so this should be markedly "
-        "more stable than IDF. **Caveat (found during analysis):** with the default "
-        "`max_df_frac=0.3`, this score is monotonic in df across the ENTIRE df-band-filtered "
-        "range (its peak sits at df/N ≈ 1/e ≈ 0.368, above the 0.3 cutoff) — so at that default,\n"
-        "`df_idf` selects the identical set as `df`. Raise `max_df_frac` past ~0.37 for this arm "
-        "to actually diverge from `df`.\n",
+        "*mid-band* cues: recurrent enough to generalise, rare enough to discriminate. "
+        "Mid-band cues scale proportionally with the corpus, so this should be markedly "
+        "more stable than IDF. The distinctiveness term is computed against `band_cap` (the "
+        "highest df surviving the df-band filter), not the full corpus `N` — using `N` there "
+        "would put the peak at df/N ≈ 1/e ≈ 0.368, above the default `max_df_frac=0.3` cutoff, "
+        "making the score monotonic in df across the whole band and collapsing this arm into "
+        "plain `df` (see `cue_normalize._band_df_idf_score` for the fix and the derivation).\n",
         "\n**`band`** scores by distance to a target prevalence, `−|log(df/N) − log(target)|`. "
         "Because it uses the *relative* rate `df/N` rather than absolute counts, the criterion is "
         "invariant to corpus size, directly attacking the churn mechanism.\n",

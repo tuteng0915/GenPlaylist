@@ -119,6 +119,12 @@ def main():
     print(f"[production] {len(items)} songs, {len(lyrics_raw)} with lyrics, "
           f"{len(block_tokens)} blocked artist tokens")
 
+    # min_df is corpus-relative (see config.ProductionConfig.min_df_frac), resolved
+    # here against the corpus this run actually builds from (respects --limit).
+    resolved_min_df = cue_normalize.resolve_min_df(cfg.min_df_frac, len(items))
+    print(f"[production] min_df: frac={cfg.min_df_frac} x {len(items)} songs "
+          f"-> min_df={resolved_min_df}")
+
     if args.fixed_vocab:
         fixed_vocab_path = str(Path(args.fixed_vocab).expanduser().resolve())
         vocab = cue_export.load_vocab(fixed_vocab_path)
@@ -158,7 +164,7 @@ def main():
         vocab, item2cues, norm_stats, cue_emb = pipeline.build_vocab_and_assign(
             cfg.method, items, lyrics_proc, run_dir,
             force=cfg.force, top_n=cfg.top_n, cache_tag=cache_tag,
-            block_tokens=block_tokens, min_df=cfg.min_df,
+            block_tokens=block_tokens, min_df=resolved_min_df,
             max_df_frac=cfg.max_df_frac, dedup_threshold=cfg.dedup_threshold,
             rank_by=cfg.rank_by, num_cues=cfg.num_cues,
             vocab_size=cfg.vocab_size, embedder=cfg.embedder,
@@ -166,6 +172,8 @@ def main():
             candidate_k=cfg.candidate_k, export_scores=True)
 
     run_config = {"preset": args.config, "generated": stamp, **asdict(cfg),
+                  "min_df": resolved_min_df,   # resolved from min_df_frac x n_items above;
+                                               # unused (vocab reused as-is) if fixed_vocab is set
                   "fixed_vocab": str(Path(args.fixed_vocab).expanduser().resolve())
                   if args.fixed_vocab else None,
                   "catalog_path": str(data_loading.CATALOG_PATH.resolve()),

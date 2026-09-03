@@ -226,6 +226,27 @@ def compute_df(raw_cues: dict[str, list[str]]) -> tuple[collections.Counter, int
     return df, len(raw_cues)
 
 
+MIN_DF_FRAC_DEFAULT = 0.002   # production default; see resolve_min_df
+MIN_DF_FLOOR = 2              # never filter this permissively regardless of corpus size
+
+
+def resolve_min_df(min_df_frac: float, n_docs: int, floor: int = MIN_DF_FLOOR) -> int:
+    """Turn a corpus-relative min_df fraction into the absolute min_df df_band_filter needs.
+
+    min_df(N) = max(floor, round(min_df_frac * N)) -- keeps the df-band noise floor
+    scale-free across corpus sizes instead of a fixed absolute count. A fixed
+    min_df=5 implies an ever-shrinking relative prevalence requirement as N grows
+    (0.5% at N=1000, only 0.1% at N=5000); this keeps that requirement constant.
+
+    Validated in sweeps/sweep_min_df.py: the same ~0.2%-of-corpus floor
+    (min_df_frac=0.002) won or tied on retrieval/grounding/reconstruction/LLM-judge
+    at both N=2000 (-> min_df=4) and N=5000 (-> min_df=10), while a fixed min_df=5
+    under-filtered at N=5000 and higher fracs (0.005, 0.01) over-filtered at both
+    sizes -- see outputs/test-mindf/ for the reports.
+    """
+    return max(floor, round(min_df_frac * n_docs))
+
+
 def df_band_filter(
     cues: list[str],
     df: collections.Counter,
@@ -412,6 +433,25 @@ def idf_score(cue: str, df: collections.Counter, n_docs: int) -> float:
 RANK_METHODS = ("idf", "df", "df_idf", "band", "random", "cluster")
 
 
+def _band_df_idf_score(candidates, df: collections.Counter) -> np.ndarray:
+    """df * log(band_cap/(1+df)) — band-relative df_idf used by the 'df_idf' and
+    'cluster' arms of select_indices.
+
+    `candidates` has already passed the df-band filter in clean_candidates (every
+    df[c] <= max_df_frac * n_docs), so `band_cap` below is ~= that ceiling. Using
+    log(N/(1+df)) with the FULL corpus size N (like the 'idf' arm does) would peak
+    at df/N ~= 1/e ~= 0.368 -- above the default max_df_frac=0.3 -- meaning every
+    candidate would sit on the strictly-increasing left side of the curve, making
+    this score monotonic in df across the whole band and thus IDENTICAL in ranking
+    to plain 'df'. Using band_cap (the actual max df present, not the full corpus)
+    instead moves the peak to band_cap/e, which is guaranteed to fall strictly
+    inside [min_df, band_cap] for any reasonable band width, so this arm actually
+    diverges from 'df' and favors true mid-band cues as its docstring claims.
+    """
+    band_cap = max((df[c] for c in candidates), default=1)
+    return np.array([df[c] * math.log(band_cap / (1 + df[c])) for c in candidates])
+
+
 def select_indices(candidates, emb, df, n_docs, n_take,
                    rank_by: str = "idf", seed: int = 0,
                    band_target: float = 0.02):
@@ -423,7 +463,10 @@ def select_indices(candidates, emb, df, n_docs, n_take,
 
       idf     : rarest first (log(N/(1+df)))            — most discriminative per cue
       df      : most frequent first                      — frequency-only extreme
-      df_idf  : df * idf                                 — peaks at mid-frequency cues
+      df_idf  : df * log(band_cap/(1+df))                — peaks at mid-band cues (band_cap =
+                                                             the highest df surviving the
+                                                             df-band filter, NOT the full corpus
+                                                             n_docs — see _band_df_idf_score)
       band    : closest to a target prevalence df/N      — scale-free (corpus-invariant)
       random  : uniform random sample (seeded)           — ablation floor, ranking removed
       cluster : k-means over embeddings, one representative per cluster — spanning codebook
@@ -455,9 +498,9 @@ def select_indices(candidates, emb, df, n_docs, n_take,
                 continue                       # empty cluster -> vocab slightly < k
             d = np.linalg.norm(emb[members] - km.cluster_centers_[c], axis=1)
             chosen.append(int(members[int(np.argmin(d))]))   # nearest to centroid
-        # order representatives by df*idf so vocab index still reflects usefulness
-        chosen.sort(key=lambda i: df[candidates[i]] * idf_score(candidates[i], df, n_docs),
-                    reverse=True)
+        # order representatives by (band-relative) df*idf so vocab index still reflects usefulness
+        df_idf_scores = _band_df_idf_score(candidates, df)
+        chosen.sort(key=lambda i: df_idf_scores[i], reverse=True)
         return chosen
 
     # score-based arms
@@ -466,7 +509,7 @@ def select_indices(candidates, emb, df, n_docs, n_take,
     elif rank_by == "df":
         scores = np.array([float(df[c]) for c in candidates])
     elif rank_by == "df_idf":
-        scores = np.array([df[c] * idf_score(c, df, n_docs) for c in candidates])
+        scores = _band_df_idf_score(candidates, df)
     elif rank_by == "band":
         tgt = math.log(band_target)
         scores = np.array([-abs(math.log(max(df[c], 1) / max(n_docs, 1)) - tgt)
