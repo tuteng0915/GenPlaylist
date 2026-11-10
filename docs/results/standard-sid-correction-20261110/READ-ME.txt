@@ -1,0 +1,19 @@
+USER DESIGN CORRECTION, 2026-11-10 16:52 SGT
+
+The primary comparison on EACH backbone is:
+  baseline: history SIDs -> next-song SIDs;
+  ours (+cues): history SIDs + catalog cues -> song SIDs + predicted cues.
+DDBC SID-only already used SID-only inputs. The extra TIGER SID+cue-input / SID-output branch was an agent-added auxiliary control, not the requested standard baseline. Do not present it as primary or call it standard TIGER.
+
+Both extra SID-arm trainings had already completed before this correction. Preserve those checkpoints/records as archived evidence; do not run their pending inference/audio/metrics. No new training is needed to obtain a standard TIGER baseline: standard20k SID->SID recommendation and941 audio+metrics per dataset already exist in outputs/two-dataset-fair-20261108/{mpd,m4a}/tiger and audio/tiger.
+
+Remote queue atomically revised from1615 to1607 tasks, with8 unstarted auxiliary tasks removed (4inference,2metrics,2matched-training reports). The238 existing TIGER audio tasks now render/validate joint only, avoiding1882 unnecessary auxiliary clips. Joint inference/training unchanged, completed auxiliary training retained, all non-TIGER tasks and ordering unchanged. Four live DDBC/HistoryCue tasks and workers were untouched; same reservation/deadline. No skipped task receives a fake completion marker.
+Old SHA256: 494ab6616af12588566e7f42f513de025b2ddbaf7ae035a993d567d98756c6b1
+New SHA256: 37f6c1869bda5bbf35a2705376f1d2a6e96673b6a02376ea20369431b52ba791
+Remote historical backup: experiments/tiger-standard-correction-20261110/tasks.original-1615.json
+
+Versioned joint_v2.sh/audio_joint_v2.sh/validate_joint_v2.py preserve renderer/revision/history/seed/duration. report_standard_v2.py compares joint with existing standard TIGER, including retrieved-cue F1 and grounding (1 by construction). Historical protocol/scripts remain intact but this user-approved amendment supersedes their auxiliary comparator instructions. New report filenames: catalog-standard-baseline-report.json, audio-standard-baseline-report.json.
+
+Comparison limits must remain explicit in evidence: both TIGER checkpoints use20k steps and beam20 with full catalog,15-item initial history and5 unique recommendations, but they use separate training implementations/initialization. Standard TIGER uses HF generation with EOS; joint ranks4SID tokens then emits cues. Do not call this an exact output-loss-only ablation or identical decoder implementation. No results for TIGER joint are claimed yet. Main table keeps fixed941 contexts per dataset, separately from M4A19771 full-test report. Audio baseline cue retrieval is downstream only, not part of SID-only recommender input.
+
+Writing handoff: use DDBC / DDBC+cues (ours) and TIGER / TIGER+cues (ours); remove auxiliary matched-SID terminology and Released DDBC main-table row per user. Retain all measured negative/null outcomes. Experiment session supplies evidence; writer owns manuscript, no body/layout edits here.

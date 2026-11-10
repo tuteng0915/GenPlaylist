@@ -31,11 +31,15 @@ prompt 的规模保持和 first-item 一样（5 首元数据歌 + 8 个 cue）�
 | 优先级 | 组 | 说明 |
 |---|---|---|
 | P0 | GenPlaylist (DDBC) + predicted cues, five-item | 主方法 |
-| P0 | DDBC SID-only + catalog cues, five-item | 同 backbone 的对照 |
+| P0 | DDBC SID-only + catalog cues, five-item | 同 backbone 的标准 SID-only 基线（SID-only 输入与输出，即证据里的 `sid_matched`） |
 | P0 | GenPlaylist (DDBC) SIDs + catalog cues, five-item | pipeline 反事实 |
 | P1 | GenPlaylist (DDBC) SIDs + no cues, five-item | |
-| P1 | Native TIGER + catalog cues, five-item | |
-| P1 | TIGER SID-only / TIGER + cues, five-item | 等 TIGER matched 推理完成后再跑 |
+| P1 | TIGER SID-only + catalog cues, five-item | 标准 TIGER（证据里的 `tiger`），即 TIGER 的主基线 |
+| P1 | GenPlaylist (TIGER) + predicted cues, five-item | 等 joint TIGER 推理完成后再跑 |
+
+2026-11-10 更新：按作者决定，基线统一为标准 SID-only 模型（SID-only 输入与输出）。
+不要再跑 "matched TIGER SID-only"（历史含 cue、只输出 SID 的辅助组），它已取消；
+标准 TIGER 只算一个组，不要重复建任务。见 `docs/WRITING_HANDOFF_STANDARD_SID_20261110.md`。
 
 History-only 不依赖预测 item，沿用已有音频，不用重跑。
 

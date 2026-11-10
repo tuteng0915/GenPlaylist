@@ -1,0 +1,27 @@
+{
+  "checked_sgt": "2026-11-10T16:52:49.321829+08:00",
+  "status": "applied-and-verified",
+  "baselines": {
+    "mpd": {
+      "full_histories": 941,
+      "audio_histories": 941,
+      "full_plan_sha256": "3ae94468c9b08f3f44a813fe29439455bc97dad85db3c6ef9d896e8bd74294b3",
+      "audio_plan_sha256": "8aa8cbda5ea9f37340d8a99e8d8a3a4851a3a4f5c158b98e3e8ea1c37180adc8"
+    },
+    "m4a": {
+      "full_histories": 19771,
+      "audio_histories": 941,
+      "full_plan_sha256": "2a3da757dd46d5eb266c24e612e27546f7f4a1b537a45cb32eed076427792063",
+      "audio_plan_sha256": "da604913e142362eb6302e76d80b8e8a47e9e0d4b98d30966586ec3097ce72ef"
+    }
+  },
+  "running_tasks_unchanged": [
+    "hc-mpd-history_top-0545",
+    "hc-m4a-history_top-0545",
+    "pb-mpd-ddbc-0545",
+    "pb-m4a-ddbc-0545"
+  ],
+  "queue_before_sha256": "494ab6616af12588566e7f42f513de025b2ddbaf7ae035a993d567d98756c6b1",
+  "queue_after_sha256": "37f6c1869bda5bbf35a2705376f1d2a6e96673b6a02376ea20369431b52ba791",
+  "queue_count": 1607
+}
