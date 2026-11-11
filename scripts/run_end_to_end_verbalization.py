@@ -154,7 +154,12 @@ def _generated_item(
     plan: dict | None,
     codebook_weights: np.ndarray,
     item2cues: dict[str, list[int]],
+    cue_intervention: str = "none",
 ) -> GeneratedItem:
+    if cue_intervention not in ("none", "drop"):
+        raise ValueError(f"Unknown cue intervention: {cue_intervention}")
+    if cue_intervention != "none" and system != "GenPlaylist":
+        raise ValueError("Cue intervention requires the unchanged GenPlaylist plan")
     context = ContextPrefix(
         item_ids=reference_ids,
         source="frozen-15-song-history",
@@ -183,6 +188,9 @@ def _generated_item(
         if len(cue_ids) != 8:
             raise ValueError("GenPlaylist end-to-end plan must contain eight predicted cues")
         cue_source = "model-predicted"
+        if cue_intervention == "drop":
+            cue_ids = []
+            cue_source = "model-predicted-removed-at-verbalization"
     elif system == "DDBC-SFT":
         cue_ids = [int(value) for value in item2cues[predicted_item][:8]]
         cue_source = "retrieved-catalog-item"
@@ -277,6 +285,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--max-examples", type=int, default=None)
     parser.add_argument("--system", action="append", choices=SYSTEMS)
+    parser.add_argument("--cue-intervention", choices=("none", "drop"), default="none",
+                        help="Remove Full's cues only at verbalization; use a separate output directory")
     return parser.parse_args()
 
 
@@ -285,6 +295,8 @@ def main() -> int:
     prepared_dir = args.prepared_dir.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     systems = tuple(args.system or SYSTEMS)
+    if args.cue_intervention != "none" and systems != ("GenPlaylist",):
+        raise ValueError("--cue-intervention drop requires --system GenPlaylist")
     plans = {
         "DDBC-SFT": _load_plan(args.ddbc_sft_result.expanduser().resolve()),
         "GenPlaylist": _load_plan(args.genplaylist_result.expanduser().resolve()),
@@ -356,6 +368,11 @@ def main() -> int:
             "cue_vocab_sha256": sha256_file(args.cue_vocab),
         },
     }
+    # Preserve legacy default manifests; intervention runs cannot resume into them.
+    if args.cue_intervention != "none":
+        identity["cue_intervention"] = args.cue_intervention
+        identity["intervention_script_sha256"] = sha256_file(Path(__file__))
+        identity["verbalizer_source_sha256"] = sha256_file(WP_D_ROOT / "verbalization.py")
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
         if _resume_identity(existing) != _resume_identity(identity):
@@ -384,6 +401,7 @@ def main() -> int:
                 plan=plans.get(system),
                 codebook_weights=codebook_weights,
                 item2cues=item2cues,
+                cue_intervention=args.cue_intervention,
             )
             result = verbalization.verbalize(
                 generated=generated,

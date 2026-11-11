@@ -1,0 +1,81 @@
+{
+  "date": "2026-11-11",
+  "datasets": [
+    "mpd",
+    "m4a"
+  ],
+  "booking": {
+    "event": "2203600921",
+    "new_gpu": "ASUS02 GPU0",
+    "original_audio_gpus": "ASUS01 GPU0-3 unchanged",
+    "deadline": "2026-11-12T01:20:30+08:00",
+    "kill_after_seconds": 20,
+    "conservative_gpu_hours": 120
+  },
+  "P1": {
+    "alpha": [
+      0,
+      0.25,
+      0.5,
+      1
+    ],
+    "mixture": "probability interpolation; two forwards including endpoints; only target cues masked in suppressed branch",
+    "checkpoint": "existing conditional_mask6000 EMA",
+    "validation_contexts": 512,
+    "beam": 4,
+    "final_cue_pass": 256,
+    "same_t": true,
+    "guardrails": {
+      "cue_f1_absolute_drop_max": 0.005,
+      "diversity_relative_floor": 0.9,
+      "entropy_absolute_drop_max": 0.1
+    },
+    "selection": "highest validation Recall passing point guardrails; tie prefer larger alpha; no noninferiority claim",
+    "test": "selected alpha and original1, both941; no test selection"
+  },
+  "P2": {
+    "arms": [
+      "sid",
+      "plain",
+      "preserve"
+    ],
+    "initial": "same in-house SID-only6000 EMA, same vocab layout for shared weights",
+    "extra_steps": 1000,
+    "milestones": [
+      500,
+      1000
+    ],
+    "global_batch": 512,
+    "microbatch": 32,
+    "accumulation": 16,
+    "lr": 3e-05,
+    "warmup_steps": 100,
+    "same_restart_optimizer": true,
+    "teacher_kl_weight": 0.5,
+    "temperature": 2,
+    "teacher_training_only": true,
+    "only_plain_vs_preserve_difference": "SID teacher KL; shared data, initialization, conditional mask, cue weight, optimizer and decoder",
+    "cue_weight": 0.1,
+    "no_bundled_new_scheduler_or_mask_mix": true,
+    "final_decoder_alpha": 1,
+    "seed": 1,
+    "validation_contexts": 512,
+    "monitor_contexts": 128,
+    "test_contexts": 941,
+    "budget_note": "equal updates/examples; teacher adds compute, runtime reported"
+  },
+  "metrics": [
+    "Recall@5",
+    "Cue F1",
+    "song diversity (catalog coverage)",
+    "catalog entropy",
+    "top10 song share",
+    "CLHE OAS"
+  ],
+  "evidence": "independent multiset checks, exhaustive120 OAS matching, paired10000 source-group bootstrap",
+  "audio_queue_unchanged_sha256": "7927f6bff3e1aeb519d1a7d82c12535e8e65881853189484cd982232e27ea1b2",
+  "automation": false,
+  "paper_edit": false,
+  "push": false,
+  "sync": false
+}

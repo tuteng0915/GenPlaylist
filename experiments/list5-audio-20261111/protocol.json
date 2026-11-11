@@ -1,0 +1,77 @@
+{
+  "schema": "genplaylist-list5-generation-protocol-v1",
+  "datasets": [
+    "MPD",
+    "Music4All-Onion"
+  ],
+  "sample_lists_per_dataset": 100,
+  "positions_per_list": 5,
+  "clips_per_arm_dataset": 500,
+  "cohort_seed": 20261111,
+  "sample_population": "fixed941 evaluation contexts, uniform without replacement per dataset; same indices across methods",
+  "candidate_setting": "full_catalog (default stated while optional user clarification is pending)",
+  "arms": [
+    "ddbc_sid",
+    "tiger_sid",
+    "ddbc_joint",
+    "tiger_joint",
+    "direct",
+    "history_random",
+    "profile",
+    "drop",
+    "retrieved"
+  ],
+  "total_expected_clips": 9000,
+  "recommendation_metrics": "keep existing941-context retrieval evaluation;100list sampling changes audio evaluation only",
+  "ddbc_cues": "existing verified fixed-final-SID full-catalog corrected plan; no reuse of pre-fix predicted-cue audio",
+  "audio_seed": "42000 + original941_history_index + 941*item_position",
+  "rendering": {
+    "duration_seconds": 30,
+    "inference_steps": 60,
+    "qwen": "Qwen/Qwen3-4B-Instruct-2507",
+    "qwen_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "ace": "existing pinned ACE-Step-v1-3.5B snapshot",
+    "history_context": "original15 songs, unchanged across5 positions"
+  },
+  "baselines_without_sid": "Five independent diffusion seeds per history; history-only/profile may share text; random-history cues sampled independently per slot",
+  "statistics": "MERT/CLAP average5item scores within each list, then100list mean and paired10000bootstrap; FAD from500generated and corresponding500target occurrences; no comparison toold941first-item FAD",
+  "reuse": "Only when item/cues/history/prompt/model/seed allmatch; slots1-4 never reuse slot0 waveform",
+  "old_protocol": "archive941-first-item results and retire unstarted old audio tasks; preserve currently running jobs and completed artifacts",
+  "paper_update": false,
+  "push": false,
+  "automation": false,
+  "source_sha256": {
+    "enqueue.py": "7e97ef66af0cf6caa20074588ae21039427627c054bdf04330f7e723182088f5",
+    "metrics.py": "3605d5a24ceb72f11139e9cf0eecd709cee80267e1c2c8d12bab71f3db896257",
+    "verbalize.py": "47b1ba4e435dc3e358405fba0ab4956a831029753ae18fc7f1835e276f1d29e3",
+    "cpu_test.py": "555c936aa2db150570f18b5416b19ca882dfc6dd39b6503cedb55880f9102f72",
+    "audio.sh": "ff143a0cca8a02af2be837651caf23c00f1f9ca375772872f2b10952d1e7dccd",
+    "synthesize.py": "16e8d3dd9035285ae4066953eebba1629468630d5c4f7665af8e64b8f10dbb27",
+    "validate.py": "25df7d69e918ee45f56ed9477f572556c22e96f21cdf749ff751137262e727a4",
+    "common.py": "fa11d949444184534665649160a23d630e21742cafb33cfff749e022750becf2",
+    "receive_references.py": "905055357a09d279a4254dacad8e3d86c604b38b070575e9522d9caf91fff2d3",
+    "report.py": "fd5c5eeeaa720b1df1b06dd4e5ddd40090861feac5b0cd105ff3e53ce6a19404",
+    "prepare.py": "ba8c6081eb10b56da287dea74b67ed8c4bbf1c832807a53815efbe6727f3ff81"
+  },
+  "booking": {
+    "event": "2203600921",
+    "node": "ASUS01",
+    "gpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "start": "2026-11-11T01:22:00+08:00",
+    "end": "2026-11-12T01:22:00+08:00",
+    "term": "2026-11-12T01:20:30+08:00",
+    "kill_after_seconds": 20
+  },
+  "queue_transition": {
+    "retired_unstarted_first_item_tasks": 503,
+    "new_tasks": 974,
+    "shared_total": 2174,
+    "sha256": "af48f0edde6cd3aa5ae0d12784400096bebdfa67985012f0e029ddb9e2c430b7"
+  },
+  "metric_environment": "envs/audio-eval-20261107"
+}

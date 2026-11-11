@@ -237,7 +237,10 @@ def _group_texts(examples, block_size, bos, eos):
 
 def get_dataset(
     dataset_name, tokenizer, wrap, mode, cache_dir,
-    block_size=1024, num_proc=len(os.sched_getaffinity(0)), streaming=False):
+    block_size=1024, num_proc=None, streaming=False):
+  if num_proc is None:
+    num_proc = (len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity')
+                else (os.cpu_count() or 1))
   if wrap:
     filename = f'{dataset_name}_{mode}_bs{block_size}_wrapped.dat'
   else:
