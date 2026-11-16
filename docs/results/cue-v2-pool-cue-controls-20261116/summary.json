@@ -1,0 +1,83 @@
+{
+  "status": "complete",
+  "date": "2026-11-16",
+  "cohort": {
+    "contexts_per_dataset": 941,
+    "matching": "maximum-weight one-to-one matching over five cue sets by within-item cue multiset F1"
+  },
+  "controls": {
+    "joint": "model-predicted cues from the full active v2 cue vocabulary",
+    "sid_only": "10 fixed uniform draws of 40 cues from the distinct union over 15 history items and five already returned items; partitioned into five eight-cue sets",
+    "random": "10 fixed uniform draws of 40 cues from the active v2 vocabulary; partitioned into five eight-cue sets",
+    "popularity": "the 40 active v2 cues with highest catalog-song frequency, partitioned in rank order into five eight-cue sets",
+    "sparse_pool_rule": "sample without replacement when pool size >= 40; otherwise sample with replacement only within that same pool"
+  },
+  "bootstrap": {
+    "replicates": 10000,
+    "seed": 42,
+    "quantity": "paired joint-minus-control difference"
+  },
+  "results": {
+    "mpd": {
+      "overall_cue_f1": {
+        "random_vocab": 0.0183634431,
+        "popularity_top40": 0.1249468650,
+        "ddbc_sid_pool": 0.0866790648,
+        "ddbc_joint": 0.2465993624,
+        "tiger_sid_pool": 0.0868119022,
+        "tiger_joint": 0.2762221041
+      },
+      "category_cue_f1": {
+        "ddbc_joint": {"sound": 0.0286240575, "emotion": 0.3693942614, "theme": 0.0682607969},
+        "tiger_joint": {"sound": 0.0411755478, "emotion": 0.4109812256, "theme": 0.1075761622},
+        "ddbc_sid_pool": {"sound": 0.0338925830, "emotion": 0.1562444208, "theme": 0.0751404032},
+        "tiger_sid_pool": {"sound": 0.0339512676, "emotion": 0.1508466171, "theme": 0.0761581141}
+      },
+      "joint_minus_own_sid_pool": {
+        "ddbc": {"estimate": 0.1599202976, "bootstrap_95_ci": [0.1557889878, 0.1640755181]},
+        "tiger": {"estimate": 0.1894102019, "bootstrap_95_ci": [0.1833342189, 0.1953162859]}
+      },
+      "sid_pool_diagnostics": {"ddbc": {"min": 58, "mean": 90.1477152, "contexts_below_40": 0}, "tiger": {"min": 62, "mean": 91.2476089, "contexts_below_40": 0}}
+    },
+    "m4a": {
+      "overall_cue_f1": {
+        "random_vocab": 0.0176965994,
+        "popularity_top40": 0.1647183847,
+        "ddbc_sid_pool": 0.1319925611,
+        "ddbc_joint": 0.1731934113,
+        "tiger_sid_pool": 0.1430897981,
+        "tiger_joint": 0.2226354942
+      },
+      "category_cue_f1": {
+        "ddbc_joint": {"sound": 0.2742548796, "emotion": 0.0784889429, "theme": 0.0433192867},
+        "tiger_joint": {"sound": 0.3255784681, "emotion": 0.0945858003, "theme": 0.0699289847},
+        "ddbc_sid_pool": {"sound": 0.1796660770, "emotion": 0.0673490039, "theme": 0.0816250581},
+        "tiger_sid_pool": {"sound": 0.1933381377, "emotion": 0.0730505373, "theme": 0.0892362524}
+      },
+      "joint_minus_own_sid_pool": {
+        "ddbc": {"estimate": 0.0412008502, "bootstrap_95_ci": [0.0365700717, 0.0459857200]},
+        "tiger": {"estimate": 0.0795456961, "bootstrap_95_ci": [0.0727391073, 0.0865145457]}
+      },
+      "sid_pool_diagnostics": {"ddbc": {"min": 5, "mean": 78.2167906, "contexts_below_40": 11}, "tiger": {"min": 6, "mean": 68.8969182, "contexts_below_40": 26}}
+    }
+  },
+  "source": {
+    "remote_root": "/storage_fast/ttu/GenPlaylist/outputs/cue-v2-r31e-evaluation-20261115",
+    "summary_file": "v2-pool-cue-control-summary.json",
+    "summary_sha256": "f3911ed697bad4e23673a74b25907ba73792993b2e4a07603d26e3e177ddea7d",
+    "raw_file_sha256": {
+      "mpd/random-vocab-one-to-one.json": "83c162e8c6eae02a9ab6a05e06279111eefff10aacd4ef54638c06a46cb14ed0",
+      "mpd/popularity-top40-one-to-one.json": "f050a501700bb1dafb882d27120b6eab0a7611fe6ddee661cec5927ea911c655",
+      "mpd/ddbc-sid-pool-one-to-one.json": "c86e859262945845bd4e18f25d284f9a6cae2bc3c40368c41a0a3f7275ca9304",
+      "mpd/tiger-sid-pool-one-to-one.json": "12469fe6888cb7248654166c772a6d52130b87fe94edf49b52e39846ea303c8e",
+      "mpd/ddbc-joint-one-to-one.json": "6191e43a1df3140d70e22071ce38fa11381ac38177e201f1fe593de40dc6692a",
+      "mpd/tiger-joint-one-to-one.json": "53508f2af4b672b4b1aa3226da8cc4e63fe25c610eda34ccffc409e41f10edf2",
+      "m4a/random-vocab-one-to-one.json": "a930721b3074ba9cfd9d4e61ea477fc2f4e1d98556f62033a866ec7f82af79c2",
+      "m4a/popularity-top40-one-to-one.json": "7b680efee54ba5eb148fbf9c7b4d4a96e8c9c2c07f16d724d1b3d2e88eec4898",
+      "m4a/ddbc-sid-pool-one-to-one.json": "008c17ff84e0e2322b8cbebc57d60f520a442733cd7b041897cbb97912217c16",
+      "m4a/tiger-sid-pool-one-to-one.json": "bbe11a0a0d12c199d87f7f067f002216a40aa6380b019dcd51483251bbfc2f45",
+      "m4a/ddbc-joint-one-to-one.json": "6d46cc5e067bb646408b989aa455abb06cfd9aaee71f0b56fb2d294470b45f9e",
+      "m4a/tiger-joint-one-to-one.json": "67dc9b526fb37200ef00ee80345b88d57dc0632fcd2e94cbccb7c0a882c0cd37"
+    }
+  }
+}
