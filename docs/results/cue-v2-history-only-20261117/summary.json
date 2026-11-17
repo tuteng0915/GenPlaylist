@@ -1,0 +1,44 @@
+{
+  "status": "complete",
+  "protocol": "fixed 941 contexts; most recent five distinct history songs; popularity fills shortage only if needed; pooled cue control is 10 fixed 40-cue draws from history plus returned-song v2 cue union, split 5x8 and one-to-one matched to five target cue sets",
+  "reports": {
+    "mpd": {
+      "recall_at_5": 0.0,
+      "diversity": 0.44618089470599726,
+      "unique_recommended_songs": 2284,
+      "catalog_size": 5119,
+      "hit_at_5": 0.0,
+      "history_repeat_rate": 1.0,
+      "clhe_oas": 0.6383354066925973,
+      "pooled_cue_f1": {
+        "overall": 0.08953772582359192,
+        "sound": 0.035508341345748366,
+        "emotion": 0.18473680481756996,
+        "theme": 0.0736323598470251
+      }
+    },
+    "m4a": {
+      "recall_at_5": 0.14197662061636604,
+      "diversity": 0.30164383561643837,
+      "unique_recommended_songs": 3303,
+      "catalog_size": 10950,
+      "hit_at_5": 0.42295430393198724,
+      "history_repeat_rate": 1.0,
+      "clhe_oas": 0.4891489270687892,
+      "pooled_cue_f1": {
+        "overall": 0.15032943676939428,
+        "sound": 0.20588474342990812,
+        "emotion": 0.0755626233490208,
+        "theme": 0.09110191508809999
+      }
+    }
+  },
+  "pooled_cue_control_reports": {
+    "mpd": "dcb4268cd4f491cdf658f681861e68eb463ef46ebddc0b30c4a1aaa288fc1f7e",
+    "m4a": "c3d46dfa2c86dc34b55df161333139180e4a2476d0c8e27785b01e455b7be867"
+  },
+  "source_sha256": {
+    "mpd": "b6810615aea0576f66868549c2efc089cc3568826e3f3e3b3c525237861a5c67",
+    "m4a": "089df4b374b99c7cb9c7dff3a7f7e84774be8609004698b4030b99c9b87682bc"
+  }
+}
