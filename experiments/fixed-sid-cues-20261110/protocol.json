@@ -1,0 +1,59 @@
+{
+  "purpose": "Regenerate cues conditional on already-selected final SID list, without altering recommendations",
+  "datasets": [
+    "MPD",
+    "Music4All-Onion"
+  ],
+  "contexts_per_arm": 941,
+  "arms": [
+    "full_catalog",
+    "sampled100"
+  ],
+  "model": "DDBC+cues original conditional-mask5000+1000 checkpoint, EMA",
+  "freeze": [
+    "five selected song IDs and their sequence order",
+    "all observed history tokens",
+    "all non-cue sequence tokens"
+  ],
+  "regenerate": "All40 target cue tokens, freshly masked,256 reverse steps, seed1,batch32",
+  "checkpoint_policy": "Same original checkpoint as corresponding source plan, SHA asserted",
+  "provenance": "Source plan SHA and all output song IDs checked; target cues not used as sampler input",
+  "checks": [
+    "fixed tokens invariant every denoising step",
+    "all final song IDs exactly equal to source",
+    "Recall/Precision/Hit/MRR/NDCG/history-repeat/coverage/entropy exact equality",
+    "independent CueF1 recomputation",
+    "paired10000cluster bootstrap cue difference",
+    "cue unknown/uniqueness diagnostics"
+  ],
+  "budget": "Adds256 cue-only forward steps beyond original recommendation; no new training",
+  "TIGER": "Not rerun: current SID-first joint decoder already generates cues conditioned on finalSID",
+  "audio": "No new waveform generation in this diagnostic",
+  "queue": {
+    "registered_sgt": "2026-11-10T21:36:33.611173+08:00",
+    "old_tasks": 1664,
+    "new_tasks": 9,
+    "total_tasks": 1673,
+    "queue_before_sha256": "7a0d0e12e76ce7f833fad26ecb3feb0f2d231123cdad974d9efce32697720777",
+    "queue_after_sha256": "8425e3a0ec13cde1e44be352e43c82d423975043016e45d203290201c586607e",
+    "old_task_records_and_order_preserved": true,
+    "workers_started": 0,
+    "training_tasks_added": 0,
+    "reservation_event": "2202853592",
+    "term_sgt": "2026-11-11T01:18:30+08:00",
+    "current_jobs": [
+      "pb-m4a-profile-0025.running.json",
+      "pb-mpd-profile-0025.running.json",
+      "pb-m4a-profile-0033.running.json",
+      "tjc-m4a-infer-joint-remaining.running.json"
+    ]
+  },
+  "automation": false,
+  "sync_or_push": false,
+  "code_sha256": {
+    "enqueue.py": "822a4f04dd565716457b33e474b40ff5870f0822e86da595b5624be155b10000",
+    "run.py": "2a34d9dd488985bef01cac5f9fa864fec50214700fafa0c574720c9769932161",
+    "cue_completion.py": "ec0bd780a960f900b12ea22c960337dd7240269a6317736b0af16abcad67f060",
+    "report.py": "8b20fead80c31f823fbf162f9dc10e4c9e6e1e369a02f9301ce497d4fa1ad54b"
+  }
+}

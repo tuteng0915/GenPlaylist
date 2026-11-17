@@ -1,0 +1,117 @@
+{
+  "schema": "genplaylist-tiger-joint-v1",
+  "created_sgt": "2026-11-08T19:46:00+08:00",
+  "status": "frozen_before_new_training_results",
+  "question": "Can an autoregressive TIGER backbone jointly predict recommendation SIDs and creative cues under a matched input/training protocol?",
+  "scope": "Our TIGER-based controlled adaptations, not a claim about native TIGER's original output vocabulary or its published performance",
+  "arms": {
+    "sid": "TIGER-HCue: history SID+catalog cues -> next SID; catalog cues retrieved only for audio rendering",
+    "joint": "TIGER-HCue-Joint: identical history -> next SID followed by eight learned cue tokens"
+  },
+  "existing_native_tiger": "Retain existing20k native SID-history TIGER+catalog-cue renderer as a separate external reference. It is not substituted for the newly matched control.",
+  "datasets": {
+    "mpd": {
+      "catalog": 5119,
+      "test_histories": 941,
+      "audio_histories": 941,
+      "train_rows": 51724,
+      "split_sha256": "8f1e1316137abb106078d06c79076f90bb09624a0ef02dff0c26b93cf9ad425b"
+    },
+    "m4a": {
+      "version": "Music4All-Onion-v3-u500",
+      "catalog": 10950,
+      "test_histories": 19771,
+      "audio_histories": 941,
+      "train_rows": 1202556,
+      "split_sha256": "2d4443d88d2e153a6e0b6d1fc72d76568cd979d1f52fd0d9a161bd9deff8f2a7",
+      "catalog_source": "prepared manifest and catalog_item_ids.json, SHA256 f5bd4253edbddba31cc25d735069ccf8b42484ff5673cabf619b697fe1f6b784"
+    }
+  },
+  "training": {
+    "initialization": "from scratch; same expanded SID+cue vocabulary, full parameter shapes and seeded initial parameter fingerprint for both arms",
+    "seed": 1,
+    "steps": 20000,
+    "batch_size": 256,
+    "sampled_target_positions": [
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "sampling": "independent CPU RNG; same row+offset draws per update; rolling case digest checked after training",
+    "optimizer": "Adafactor, no relative/scale LR, gradient clip1",
+    "peak_lr": 0.001,
+    "constant_steps": 10000,
+    "later_lr": "inverse square root",
+    "backbone": {
+      "d_model": 128,
+      "d_kv": 64,
+      "d_ff": 1024,
+      "layers": 4,
+      "heads": 6,
+      "dropout": 0.1
+    },
+    "loss": "mean four-SID cross entropy +0.1 mean eight-cue cross entropy (joint only) +0.1 EOS cross entropy",
+    "cue_weight_source": "fixed existing GenPlaylist cue weight; not tuned on test outcomes",
+    "test_selection": "none; fixed final20k checkpoint, no best-test checkpoint selection",
+    "resume": "model, Adafactor, sampler, torch/CUDA/dropout/python/numpy RNG and case digest",
+    "budget_interpretation": "matched updates and sampled cases within TIGER pair, not identical FLOPs; report wall time and parameters; not budget-matched to diffusion5000+1000"
+  },
+  "inference": {
+    "initial_context": "15 known items, each with frozen SID4 and catalog cue8",
+    "rollout": "five successive next-item calls; append selected item SID+catalog cues in both arms, never target or generated-cue oracle conditioning",
+    "sid_search": "beam20 ranked on exactly four legal SID tokens for both arms; no cue/EOS reranking",
+    "joint_cues": "after choosing SID, greedily generate eight tokens from full cue vocabulary; do not constrain cues to recommended song's catalog cues",
+    "candidate_policy": "complete dataset-specific catalog; visible history allowed; mask only previously emitted songs; five unique outputs",
+    "cue_order": "fixed SID->cue architectural baseline; no reverse-order experiment in this protocol"
+  },
+  "generation": {
+    "new_audio_arms_per_dataset": [
+      "joint",
+      "matched_sid"
+    ],
+    "histories": 941,
+    "seconds": 30,
+    "ace_steps": 60,
+    "seed": "42000+fixed local cohort index",
+    "models_prompts": "reuse final Qwen3-4B-Instruct-2507 and ACE revisions, adapter, prompts and decoding",
+    "cohort": "reuse exact two-dataset-fair-20261108 cohort; never select histories from observed scores",
+    "pilot": "one sample per new arm; validate SID/cue source, frozen history, hashes, seed and waveform before disjoint8-history shards"
+  },
+  "analysis": {
+    "recommendation": [
+      "Recall@5",
+      "Precision@5",
+      "Hit rate@5",
+      "MRR@5",
+      "NDCG@5",
+      "catalog coverage",
+      "catalog entropy",
+      "history repeat rate",
+      "cue multiset F1",
+      "cue-song grounding F1",
+      "cue unknown and duplicate rates"
+    ],
+    "audio": [
+      "MERT history fit",
+      "MERT next similarity",
+      "CLAP own-prompt adherence",
+      "VGGish FAD",
+      "cross-history diversity",
+      "nearest-catalog similarity"
+    ],
+    "comparisons": [
+      "TIGER-HCue-Joint vs matched TIGER-HCue",
+      "GenPlaylist vs TIGER-HCue-Joint"
+    ],
+    "statistics": "paired user/history bootstrap10000 seed42; follow-up contrast family reported separately from original two primary tests",
+    "interpretation": "Joint output itself is not exclusive to diffusion. Test whether GenPlaylist adds value in recommendation/cue/audio trade-off; report improvements or regressions without selecting favorable seeds or outcomes.",
+    "human": "no recruitment or responses"
+  },
+  "execution": {
+    "recurring_automation": false,
+    "resource_policy": "append finite tasks only after fresh reservation and actual worker checks; use actual existing deadline; do not interrupt existing work or start duplicate GPU worker",
+    "paper": "no manuscript change until verified results"
+  }
+}

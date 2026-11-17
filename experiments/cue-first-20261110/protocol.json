@@ -1,0 +1,47 @@
+{
+  "schema": "cue-first-order-v1",
+  "datasets": [
+    "mpd",
+    "m4a"
+  ],
+  "evaluation_contexts": 941,
+  "tiger": {
+    "baseline": "existing SID4->cue8 joint20k checkpoint",
+    "new": "cue8->SID4, new20k training from identical seeded initialization",
+    "encoder_unchanged": "each observed/recommended item uses SID4+catalog cues8",
+    "batch": 256,
+    "steps": 20000,
+    "seed": 1,
+    "loss": "mean SID CE + .1 mean cue CE + .1 EOS CE, slices permuted with labels",
+    "optimizer": "same Adafactor LR.001 first10k then inverse-square-root",
+    "inference": "greedy cue8 then legal beam20 SID4; five recursive calls, history allowed, generated duplicates excluded",
+    "paired_case_digest": "must exactly match existing joint20k run",
+    "validation": "fixed training-source holdout loss every1000updates, no RNG change"
+  },
+  "ddbc": {
+    "checkpoint": "original conditional_mask5000+1000, same hash for all3orders",
+    "orders": [
+      "joint_then_beam4_dedup",
+      "cue_completion_then_beam4_dedup",
+      "beam4_dedup_then_cue_completion"
+    ],
+    "cue_completion": "256 reverse steps; inactive SID channel stays MASK until its phase",
+    "sid_completion": "confidence beam4 over20 SIDpositions; common-score dedup",
+    "budget": "same cue/joint256reverse steps plus same SIDbeam4 algorithm; report actual example-forward counts and wall time",
+    "not_previous_refinement": "No initial192step joint draft followed by32+32remasking"
+  },
+  "metrics": [
+    "Recall@5",
+    "cue_f1",
+    "catalog_coverage",
+    "distinct_songs",
+    "cue_unknown_rate",
+    "cue_unique_ratio",
+    "paired bootstrap95CI",
+    "inference_cost"
+  ],
+  "no_audio_regeneration": true,
+  "no_main_table_updates_before_verified_results": true,
+  "no_automation_sync_or_push": true,
+  "original_tiger_core_sha256": "4fe2fe1a01bdf29d3ee0106f5886fb51744635e578d5b83a127a7420900290dc"
+}

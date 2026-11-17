@@ -1,0 +1,46 @@
+{
+  "dataset": "Music4All Onion v3",
+  "arms": [
+    "sid",
+    "warm",
+    "ramp",
+    "project"
+  ],
+  "initialization": "all arms standard SID-only step20000; exact shared parameter copy, same token IDs, append cue vocabulary for joint arms",
+  "steps": 2000,
+  "batch": 256,
+  "seed": 101,
+  "sampling_seed": 20261112,
+  "lr": 0.0001,
+  "lr_warmup_steps": 100,
+  "optimizer": "Adafactor reset identically; no weight decay",
+  "joint_bootstrap": "first200 steps only new cue embedding rows trained, all existing weights frozen; included in total2000 updates",
+  "cue_weight": "warm/project:0.1; ramp:0 to0.1 across steps201..1000; bootstrap0.1",
+  "loss": "mean SID CE + weighted mean cue CE + .1 EOS CE",
+  "gradient_projection": "project arm only: auxiliary cue gradient projected when dot(primary,cue)<0; primary=SID+.1EOS unchanged",
+  "decoder": "one-pass Top5 beam20, original15 history; joint ranks4SID tokens then greedy8cues; native SID ranks4SID+EOS as existing protocol",
+  "training_context": "15..19 history, uniformly sampled next slot, same examples across4arms",
+  "validation": "fixed128 training-source holdout every500 steps",
+  "test": "fixed941 existing audio cohort, fullcatalog, finalstep2000 only; no test selection",
+  "metrics": [
+    "Recall@5",
+    "Cue F1",
+    "Diversity (catalog coverage)",
+    "SID/cue/EOS losses",
+    "gradient cosine and norm"
+  ],
+  "fairness": "same source SID checkpoint, sampling, total updates, optimizer; new cue training costs extra; freeze stage and added vocabulary make warm vs SID more than loss-only comparison",
+  "baseline_cues": "SID-only evaluation retrieves catalog cues; joint predicts cues",
+  "audio": "none; existing audio results and queue untouched",
+  "deadline": "2026-11-12T16:21:30+08:00",
+  "booking": "2204284395",
+  "gpu_mapping": {
+    "0": "sid",
+    "1": "warm",
+    "2": "ramp",
+    "3": "project"
+  },
+  "automation": false,
+  "push": false,
+  "sync": false
+}

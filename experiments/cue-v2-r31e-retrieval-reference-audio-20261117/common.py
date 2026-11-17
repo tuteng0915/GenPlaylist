@@ -68,7 +68,13 @@ def source_plans(dataset):
             else R / 'outputs/two-dataset-fair-20261108/m4a/plans/sid_matched-audio.json'
         ),
     }
-    if dataset == 'm4a':
+    if dataset == 'mpd':
+        # This plan is materialized only after the corrected SID-only MPD
+        # control finishes; never fall back to the audited-invalid old plan.
+        values['tiger_reference'] = (
+            R / 'outputs/cue-v2-r31e-tiger-sid-inputfix-r2-20261116/mpd/sid/audio/plan.json'
+        )
+    else:
         values['tiger_reference'] = (
             R / 'outputs/cue-v2-r31e-tiger-sid-inputfix-r2-20261116/m4a/sid/audio/plan.json'
         )
