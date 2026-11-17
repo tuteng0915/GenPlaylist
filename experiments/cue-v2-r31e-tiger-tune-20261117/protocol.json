@@ -1,0 +1,20 @@
+{
+  "schema": "tiger-v2-warm-start-cue-ramp-v1",
+  "status": "active-training-only",
+  "question": "Can SID-only warm-start plus a small ramped cue auxiliary loss preserve Music4All SID learning while adding v2 cue prediction?",
+  "dataset": "Music4All Onion v3",
+  "fixed_source": "corrected v2 r31e SID-only checkpoint, 20,000 steps",
+  "arms": {
+    "warm-ramp-0p02": "cue weight ramps from 0 to 0.02 after a 200-step cue-embedding bootstrap",
+    "warm-ramp-0p05": "cue weight ramps from 0 to 0.05 after a 200-step cue-embedding bootstrap"
+  },
+  "shared_settings": {
+    "steps": 5000,
+    "optimizer": "Adafactor, lr 1e-4, reset state",
+    "input": "history SID4+v2 catalog cue8",
+    "output": "SID4, then 8 learned cue tokens, then EOS",
+    "test_selection": "none during training; fixed training-source validation every 500 steps"
+  },
+  "success_criteria": "Compared only after a separate fixed 941-context inference/evaluation run; no checkpoint is selected by test Recall.",
+  "scope": "This is an optimization follow-up, not a replacement for frozen baseline evidence."
+}
