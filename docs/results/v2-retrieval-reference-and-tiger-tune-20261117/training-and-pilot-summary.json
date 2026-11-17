@@ -1,0 +1,53 @@
+{
+  "schema": "genplaylist-v2-progress-result-v1",
+  "snapshot_sgt": "2026-11-17T14:46:15+08:00",
+  "scope": "Completed training validation and validated no-cue audio pilot only; no test-set recommendation outcome is claimed.",
+  "tiger_cues_warm_start_m4a": {
+    "shared": {
+      "source": "corrected v2 r3.1e SID-only checkpoint",
+      "steps": 5000,
+      "selection": "no test-set selection; fixed training-source validation at step 5000"
+    },
+    "warm_ramp_0p02": {
+      "checkpoint_sha256": "adef7dedf0cc28185aff10ca2df0924f9902805458be3e96e11f430cda8a60ee",
+      "identity_sha256": "a72e1da96251cb4d95cfa9bc2cd20e4ac5dc8683776f9c046154fbf3078c2d83",
+      "validation_step": 5000,
+      "losses": {
+        "sid": 1.6773147583007812,
+        "cue": 5.67217618227005,
+        "eos": 0.00013579795904661296
+      }
+    },
+    "warm_ramp_0p05": {
+      "checkpoint_sha256": "0bba0c8984e7ca3b8d2ecb3b7d4f4e5c4bb14f80b48af799793a729cda12c0d4",
+      "identity_sha256": "96ac39d8e432a748e022587bf6136e95a57577b86d2d7c92dba74a9832c8b352",
+      "validation_step": 5000,
+      "losses": {
+        "sid": 1.6715391427278519,
+        "cue": 5.392434895038605,
+        "eos": 4.1779743924053037e-05
+      }
+    }
+  },
+  "retrieval_reference_no_cue_pilot": {
+    "dataset": "mpd",
+    "retriever": "standard DDBC SID-only",
+    "reference_conditioning": "five retrieved songs only",
+    "cue_conditioning": "none",
+    "validated_clips": 1,
+    "audio_sha256": "55ba6bdb5eb9a382e1e375f70429d1209d9a0c34aafb826e22c45d3243702506",
+    "duration_seconds": 29.9073125,
+    "validation": ["five retrieved references", "empty cue list", "seed", "hash", "audio decode", "duration"]
+  },
+  "in_progress_at_snapshot": {
+    "mpd_tiger_sid_only": {
+      "completed_steps": 8200,
+      "total_steps": 20000,
+      "latest_training_loss": 1.7444771528244019
+    },
+    "mpd_ddbc_retrieval_reference_no_cue": {
+      "verbalization_records": 54,
+      "target_records": 500
+    }
+  }
+}
