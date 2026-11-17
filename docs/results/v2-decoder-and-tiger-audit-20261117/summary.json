@@ -1,0 +1,13 @@
+{
+  "status": "verified_results_only",
+  "fixed_cohort_contexts": 941,
+  "ddbc_redecode": {
+    "mpd": {"original_recall_at_5": 0.0170031881, "alpha_1": 0.0221041445, "alpha_0_2": 0.0365568544},
+    "m4a": {"original_recall_at_5": 0.0080765143, "alpha_1": 0.0178533475, "alpha_0_2": 0.0295430393}
+  },
+  "m4a_tiger": {
+    "corrected_sid_only": {"recall_at_5": 0.0550478215, "output_list_diversity": 0.2848034006, "cue_f1_pool_control": 0.1346147715},
+    "joint": {"recall_at_5": 0.0361317747, "output_list_diversity": 0.2312433581, "cue_f1_generated": 0.2226354942},
+    "obsolete_cue_input_sid_control": {"recall_at_5": 0.1256110521, "output_list_diversity": 0.5341126461, "cue_f1_pool_control": 0.1430897981}
+  }
+}
